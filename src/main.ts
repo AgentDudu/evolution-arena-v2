@@ -2,7 +2,7 @@
 // evolution happen. Sandbox depth (trait editor, events, edit log) comes later; this is the
 // visible-arena work item.
 
-import { DEFAULT_PARAMS, type SimParams } from './core/config.ts';
+import { DEFAULT_PARAMS, nextSpeed, type SimParams } from './core/config.ts';
 import { cssToDevice, fitCamera, toWorldX, toWorldY, type Camera } from './render/camera.ts';
 import { Renderer } from './render/renderer.ts';
 import { advance, createClock, runTimeBoxed } from './sim/loop.ts';
@@ -110,8 +110,8 @@ window.addEventListener('keydown', (event: KeyboardEvent) => {
     world.step();
   } else if (event.key === 't') {
     setTurbo(!turbo);
-  } else if (['1', '2', '4', '8'].includes(event.key)) {
-    setSpeed(Number(event.key));
+  } else if (event.key === 's') {
+    setSpeed(nextSpeed(speed));
   }
 });
 
