@@ -59,6 +59,12 @@ async function target(): Promise<{ webSocketDebuggerUrl: string }> {
 const expression = `(async () => {
   try {
     const el = document.getElementById('arena');
+    // one key cycles playback speed, so check the keybind drives the buttons, not just the label
+    const speedOn = () =>
+      [...document.querySelectorAll('button[data-speed]')].find((b) => b.getAttribute('aria-pressed') === 'true')?.dataset.speed;
+    const speedBefore = speedOn();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 's' }));
+    const speedAfterKey = speedOn();
     const before = window.arena.world().tick;
     const start = performance.now();
     await new Promise((r) => setTimeout(r, ${Math.round(seconds * 1000)}));
@@ -84,6 +90,7 @@ const expression = `(async () => {
     return {
       realtime,
       turbo,
+      speedCycle: speedBefore + 'x --key s--> ' + speedAfterKey + 'x',
       population: afterTurbo.alive,
       food: afterTurbo.foodCount,
       meanGeneration: Number(afterTurbo.report().meanGeneration.toFixed(2)),

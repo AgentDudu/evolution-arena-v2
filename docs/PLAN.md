@@ -306,6 +306,10 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
   means move by more than 8% of their range. Deliberately direction-free: which traits win is a
   property of the seed and food field, so hard-coding directions would make the test a tautology.
   Two more seeds are checked at 10000 ticks. Slowest file in the suite (~105 s).
+- Long arena runs in tests are chunked (`1000` ticks then `setImmediate`) because the vitest
+  worker→host progress channel has a fixed 60 s timeout with no config knob (vitest#11082, #8164):
+  one synchronous 60 s+ loop makes the whole run exit 1 with `Timeout calling "onTaskUpdate"`
+  even though every test passed.
 - `scripts/browser-check.ts` (`pnpm browser-check`, needs `vite preview`) — drives headless Edge over
   CDP: asserts no page exception, reports real-time ticks/s, turbo ticks/s, population/food/generation,
   canvas pixel size, and the fraction of canvas pixels that differ from the background (proof the

@@ -137,6 +137,15 @@ export function validateParams(p: SimParams): void {
   if (problems.length > 0) throw new Error(`invalid SimParams:\n  ${problems.join('\n  ')}`);
 }
 
+/** Playback speeds the UI cycles through. One key walks the list instead of a key per speed. */
+export const SPEED_STEPS = [1, 2, 4, 8];
+
+export function nextSpeed(current: number): number {
+  const index = SPEED_STEPS.indexOf(current);
+  // An off-list speed (a preset value, say) falls back to the first step.
+  return SPEED_STEPS[(index + 1) % SPEED_STEPS.length];
+}
+
 export function randomGene(rng: { float(): number }, name: GeneName): number {
   const g = GENES[name];
   return g.min + (g.max - g.min) * rng.float();

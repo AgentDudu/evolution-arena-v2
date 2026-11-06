@@ -22,7 +22,8 @@ pnpm browser-check                # headless Edge over CDP: ticks/s, turbo, pain
 ```
 
 Controls: click = drop food, shift+click = inspect an organism (shows its sense radius), space =
-pause, n = one tick, 1/2/4/8 = speed, t = turbo (no rendering).
+pause, n = one tick, s = cycle speed 1x → 2x → 4x → 8x, t = turbo (ticks until the frame budget is
+spent, still draws).
 
 ## Secret gate
 

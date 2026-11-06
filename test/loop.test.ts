@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_PARAMS } from '../src/core/config.ts';
+import { DEFAULT_PARAMS, nextSpeed } from '../src/core/config.ts';
 import { World } from '../src/sim/world.ts';
 import { advance, createClock, runTimeBoxed } from '../src/sim/loop.ts';
 import { hueBucket, HUE_BUCKETS, PALETTE, paletteKey } from '../src/render/palette.ts';
@@ -8,6 +8,14 @@ import { hueBucket, HUE_BUCKETS, PALETTE, paletteKey } from '../src/render/palet
 const newWorld = (): World => new World({ ...DEFAULT_PARAMS, seed: 'loop' });
 
 describe('fixed-step loop', () => {
+  it('cycles speed 1x -> 2x -> 4x -> 8x -> 1x, one key for all speeds', () => {
+    expect(nextSpeed(1)).toBe(2);
+    expect(nextSpeed(2)).toBe(4);
+    expect(nextSpeed(4)).toBe(8);
+    expect(nextSpeed(8)).toBe(1);
+    expect(nextSpeed(3)).toBe(1); // an off-list speed falls back to the first step
+  });
+
   it('turbo time-box stops at the millisecond budget, always runs a tick, and honours the cap', () => {
     const world = newWorld();
     let calls = 0;
