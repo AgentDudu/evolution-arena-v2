@@ -79,12 +79,18 @@ export class World {
 
   private readonly fxAt = (i: number): number => this.fx[i];
   private readonly fyAt = (i: number): number => this.fy[i];
+  /** Set per organism before a food query: the largest particle radius it can handle (gape). */
+  private foodGape = 0;
+  private readonly isEdible = (j: number): boolean => (this.fr[j] ?? 0) <= this.foodGape;
   private readonly orgXAt = (i: number): number => this.x[i];
   private readonly orgYAt = (i: number): number => this.y[i];
 
   foodCount = 0;
   readonly fx: Float64Array;
   readonly fy: Float64Array;
+  /** Per-particle radius and energy: two size classes, so gape decides who can eat what. */
+  readonly fr: Float64Array;
+  readonly fe: Float64Array;
 
   private readonly orgGrid: UniformGrid;
   private readonly foodGrid: UniformGrid;
@@ -116,6 +122,8 @@ export class World {
 
     this.fx = new Float64Array(params.foodCap);
     this.fy = new Float64Array(params.foodCap);
+    this.fr = new Float64Array(params.foodCap);
+    this.fe = new Float64Array(params.foodCap);
 
     this.orgGrid = new UniformGrid(params.worldWidth, params.worldHeight, 64, this.cap);
     this.foodGrid = new UniformGrid(params.worldWidth, params.worldHeight, 32, params.foodCap);
@@ -163,15 +171,25 @@ export class World {
     const i = this.foodCount++;
     this.fx[i] = this.rng.range(0, this.params.worldWidth);
     this.fy[i] = this.rng.range(0, this.params.worldHeight);
+    this.addFoodClass(i);
     return true;
   }
 
+  /** One rng draw per particle, whatever the class, so the stream stays aligned across variants. */
+  private addFoodClass(i: number, big?: boolean): void {
+    const p = this.params;
+    const isBig = big ?? this.rng.float() < p.bigFoodShare;
+    this.fr[i] = isBig ? p.bigFoodRadius : p.foodRadius;
+    this.fe[i] = isBig ? p.bigFoodEnergy : p.foodEnergy;
+  }
+
   /** Inject food at a position (sandbox painting uses the same deterministic stream). */
-  placeFood(px: number, py: number): boolean {
+  placeFood(px: number, py: number, big?: boolean): boolean {
     if (this.foodCount >= this.params.foodCap) return false;
     const i = this.foodCount++;
     this.fx[i] = clamp(px, 0, this.params.worldWidth);
     this.fy[i] = clamp(py, 0, this.params.worldHeight);
+    this.addFoodClass(i, big);
     return true;
   }
 
@@ -179,6 +197,8 @@ export class World {
     const last = --this.foodCount;
     this.fx[i] = this.fx[last];
     this.fy[i] = this.fy[last];
+    this.fr[i] = this.fr[last];
+    this.fe[i] = this.fe[last];
   }
 
   private killOrganism(i: number): void {
@@ -339,10 +359,11 @@ export class World {
       const px = this.x[i];
       const py = this.y[i];
       const sr = this.gene.senseRadius[i];
+      this.foodGape = Math.max(p.foodGapeMin, p.foodGapeShare * this.gene.radius[i]);
       let sx = 0;
       let sy = 0;
 
-      const food = this.foodGrid.nearest(px, py, sr, this.fxAt, this.fyAt);
+      const food = this.foodGrid.nearest(px, py, sr, this.fxAt, this.fyAt, this.isEdible);
       if (food >= 0) {
         const dx = this.fx[food] - px;
         const dy = this.fy[food] - py;
@@ -434,12 +455,17 @@ export class World {
   private eat(): void {
     const p = this.params;
     for (let i = 0; i < this.alive; i++) {
-      const reach = this.gene.radius[i] + p.foodRadius;
+      const r = this.gene.radius[i];
+      this.foodGape = Math.max(p.foodGapeMin, p.foodGapeShare * r);
+      // reach spans the largest particle class; isEdible is what keeps a small organism off a big one
+      const reach = r + p.bigFoodRadius;
       // shortcut: food cells go stale after a swap-remove within the same tick; the distance
       // check in nearest() still holds, so a particle is only ever missed, never double eaten.
-      const f = this.foodGrid.nearest(this.x[i], this.y[i], reach, this.fxAt, this.fyAt);
+      const f = this.foodGrid.nearest(this.x[i], this.y[i], reach, this.fxAt, this.fyAt, this.isEdible);
       if (f < 0) continue;
-      this.energy[i] += p.foodEnergy;
+      // a particle too small to be worth handling for this organism still gets eaten, for almost nothing
+      const crumbs = (this.fr[f] ?? 0) < p.foodMinShare * r ? p.foodSmallPenalty : 1;
+      this.energy[i] += (this.fe[f] ?? p.foodEnergy) * crumbs;
       const cap = this.gene.reproThreshold[i] * 2;
       if (this.energy[i] > cap) this.energy[i] = cap;
       this.removeFood(f);

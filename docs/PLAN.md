@@ -276,6 +276,7 @@ all sim input through messages and complicates the sandbox tools).
 | Mean genome drift, `arena-1` tick 500 → 36000 | radius 10.6 → 14.1, sense 91 → 34, metabolism 1.04 → 0.63, seek 0.61 → 0.76, flee 0.53 → 0.36 |
 | Food at 10 sim-min | 36–76 particles: the arena is food-limited, which is what drives the drift above |
 | Tick cost with predation on | 2.1–2.8 ms/tick at pop 1400–1800 (1.3–1.9 without); bench @1148 organisms 1.63 ms |
+| Tick cost with the size-niche food web (item 4b) | 3.7–4.6 ms/tick at the 2000 cap — inside the 16.7 ms frame, but the two-class food grid and the wider reach query cost ~1.5x predation-only |
 | Headless 36000 ticks with predation | `arena-1` pop 1494, 6 size classes r5.3–r15.6 (giants 940+425, dwarfs 85+19); `morph-1` pop 1425, 6 classes; `long-2` pop 1777, 7 classes, mean radius 7.9 — a different food web per seed |
 | Browser turbo with predation | ~208 ticks/s at 49 fps (was ~400): one extra grid query per hunter per tick is the whole gap |
 | Bundle | 6.45 kB gzipped (budget 200 kB) |
@@ -322,7 +323,7 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
   one synchronous 60 s+ loop makes the whole run exit 1 with `Timeout calling "onTaskUpdate"`
   even though every test passed.
 - Slow files are named `*.long.test.ts`. `pnpm test` runs everything (69 tests, ~160 s, the proof);
-  `pnpm test:quick` excludes that glob (53 tests, ~4 s) and is the edit loop. The quick lane keeps
+  `pnpm test:quick` excludes that glob (59 tests, ~4 s) and is the edit loop. The quick lane keeps
   a 500-tick determinism check (`determinism.test.ts`) so the core invariant is never skipped.
 - `scripts/browser-check.ts` (`pnpm browser-check`, needs `vite preview`) — drives headless Edge over
   CDP: asserts no page exception, reports real-time ticks/s, turbo ticks/s, population/food/generation,
@@ -338,6 +339,11 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
   never exceeded by a 216000-tick (one sim-hour) sample stream while the stride grows 15 -> 240,
   and `uPlotData` hands out views not copies. Also covers size bins covering every organism and
   `slotOfLineage` finding an organism again after the array compacts.
+- `food-web.test.ts` — the size-niche rule: gape blocks a large particle from a dwarf and not from
+  a giant; the handling penalty is worth exactly the share it claims; while nothing in the arena can
+  handle the large class every large particle survives and the population starves in sight of it.
+- `food-web.long.test.ts` — 3 seeds x 7.5 sim-minutes: p90-p10 radius spread >= 4 with both size
+  bands holding >= 5% of the population in over 90% of samples, plus the large-particle reservoir.
 - `save.test.ts` — replay from seed + edit log reproduces the same `stateHash`.
 - `bench.test.ts` — throughput numbers printed.
 - Manual QA checklist in the docs: pause/step/speed, all sandbox tools, all charts, resize +
@@ -394,12 +400,13 @@ Each item is independently mergeable to `develop` and leaves the app running.
 | 2 | Visible arena | Canvas 2D aerial renderer, DPR/resize, fitted world, food + movement + energy + death, play/pause/step/speed | 100 organisms visible, whole world on screen, 60 fps, organisms starve and die | M |
 | 3 | Genome + selection | Full gene set, allometric costs, fission with mutation, hue marker, lineage ids, generations | population survives > 10 sim-minutes and gene means visibly drift (test asserts drift, not direction) | M |
 | 4 | Predation & food web | size-ratio eats, juvenile + gape size floors, energy transfer, species as size classes | two size morphs coexist for > 5 sim-minutes; species count line is non-trivial | M |
+| 4b | Long-run food web | two food size classes, gape limit, handling penalty: the big morph owns a resource the small one cannot spend | dwarf and giant morphs both stand at the 60-minute mark on 3 seeds with nothing in between | M |
 | 5 | Sandbox tools | paint food, spawn from trait editor, delete, live params, events, seed/reset | an engineered lineage placed mid-run visibly competes with the wild population | L |
 | 6 | Graphs & inspector | uPlot panels (population, energy, trait means, species), histogram, per-organism inspector + isolate/follow | all panels update live and survive a 1-hour turbo run without heap growth | M |
 | 7 | Save & share | autosave, named slots, seed+params+log replay, share link, CSV/JSON export | a share link reproduces the sender's `stateHash` at its tick count | M |
 | 8 | Hardening & polish | perf pass vs budgets, keyboard shortcuts, mobile/touch basics, README how-to-run, error boundary, `precommit-scan` hook | budgets in §10 met on a mid-range laptop; fresh clone runs with `pnpm i && pnpm dev` | M |
 
-Done so far: items 1-4 and 6 are merged. Item 4 evidence — `test/predation.test.ts` holds the
+Done so far: items 1-4, 4b and 6 are merged. Item 4 evidence — `test/predation.test.ts` holds the
 rule (overlap + ratio + both size floors + one kill per hunter + energy cap) and shows two radius
 morphs separated by >= 4 units coexisting for over 5 sim-minutes; the HUD prints the class count.
 
@@ -414,6 +421,22 @@ run 240 s of turbo (59378 ticks, pop ~1400) with `--expose-gc` and saw collected
 no page exceptions; `node --expose-gc scripts/headless.ts 216000 arena-1` (a real sim hour)
 held collected heap at 8.1 -> 8.3 MB. Panels read typed-array views and normalize into reused
 buffers, so a 4 Hz graph refresh allocates nothing.
+
+Item 4b (measured, `scripts/foodweb.ts`) — item 4 only held for 5 sim-minutes. At a full sim hour the
+old default world was a giant monoculture: mean radius 15.4 against a ceiling of 16, dwarf class down
+to 20 of 1489. Diagnosis: predation is not what makes giants win (with predation off, radius still
+reaches p50 15.1) — `eat()` uses `reach = radius + foodRadius`, so size *is* the feeding advantage and
+radius runs to the gene ceiling. `predatorMinRadius` is inert: ratio 1.25 x preyMinRadius 9 already
+forces hunters >= 11.25 (a variant with the floor at 11 produced a byte-identical trace). And
+`gene.metabolism` is a pure cost multiplier, so it pins at its 0.6 floor with no counter-pressure.
+Turning up the allometric size cost was seed-contingent, not a fix: `metaK 0.5` was bimodal on arena-1
+(spread 11.4) and a dwarf monopoly on long-2 (giants 0). The mechanism that holds is a second food
+size class behind a gape limit: 20% of particles are large (radius 8, 60 energy) and only organisms
+with radius >= 14.5 can handle them, so the big morph owns a resource the dwarf morph cannot spend and
+does best when it is rare. At the 60-minute mark, three seeds: arena-1 1566 dwarfs + 433 giants
+(spread 11.5), long-2 1817 + 183 (4.6), fw-3 1077 + 730 (12.0), middle empty. Making crumbs outright
+inedible for giants was tried and measured worse: giants fell to 121-235 and shrank while 228 large
+particles went uneaten around them, so the exclusion is economic (`foodSmallPenalty`), not physical.
 
 Order is dependency order, not a promise about commit content. Items 1-4 make evolution happen;
 5-7 make it a sandbox you can manipulate and share; 8 makes it pleasant and fast.

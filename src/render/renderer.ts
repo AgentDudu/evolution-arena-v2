@@ -18,6 +18,7 @@ export interface DrawOptions {
 const BACKGROUND = '#0b0f14';
 const ARENA_EDGE = '#2a3644';
 const FOOD_COLOR = '#5fd08a';
+const BIG_FOOD_COLOR = '#c8e66a';
 const DIM_ORGANISM = '#1d2530';
 
 export class Renderer {
@@ -51,11 +52,25 @@ export class Renderer {
     ctx.fillStyle = BACKGROUND;
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+    // two passes, one per particle class: the large class is the giants' exclusive resource, so it
+    // has to be visible as its own thing (and fillStyle per particle would cost 1500 style changes)
     ctx.fillStyle = FOOD_COLOR;
+    ctx.beginPath();
     for (let i = 0; i < world.foodCount; i++) {
-      const size = Math.max(1, p.foodRadius * 2 * camera.scale);
-      ctx.fillRect(toPixelX(camera, world.fx[i]) - size / 2, toPixelY(camera, world.fy[i]) - size / 2, size, size);
+      if ((world.fr[i] ?? p.foodRadius) >= p.bigFoodRadius) continue;
+      const size = Math.max(1, (world.fr[i] ?? p.foodRadius) * 2 * camera.scale);
+      ctx.rect(toPixelX(camera, world.fx[i]) - size / 2, toPixelY(camera, world.fy[i]) - size / 2, size, size);
     }
+    ctx.fill();
+
+    ctx.fillStyle = BIG_FOOD_COLOR;
+    ctx.beginPath();
+    for (let i = 0; i < world.foodCount; i++) {
+      if ((world.fr[i] ?? p.foodRadius) < p.bigFoodRadius) continue;
+      const size = Math.max(1, (world.fr[i] ?? p.foodRadius) * 2 * camera.scale);
+      ctx.rect(toPixelX(camera, world.fx[i]) - size / 2, toPixelY(camera, world.fy[i]) - size / 2, size, size);
+    }
+    ctx.fill();
 
     for (const bucket of this.buckets) bucket.length = 0;
     this.dim.length = 0;

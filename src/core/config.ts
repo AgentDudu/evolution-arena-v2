@@ -4,7 +4,7 @@
 import { clamp } from './space.ts';
 import type { Seed } from './rng.ts';
 
-export const CONFIG_VERSION = 2;
+export const CONFIG_VERSION = 3;
 
 export type WallMode = 'bounce' | 'wrap';
 
@@ -45,6 +45,23 @@ export interface SimParams {
   foodPerTick: number;
   foodEnergy: number;
   foodRadius: number;
+  /** Large particle class. Only organisms whose gape covers it can handle it, which is what gives the
+   *  big morph a resource the small morph cannot touch. */
+  bigFoodRadius: number;
+  /** Share of spawned particles that come from the large class. */
+  bigFoodShare: number;
+  bigFoodEnergy: number;
+  /** Gape limit: a particle of radius r is only handled when r <= foodGapeShare * organism radius. */
+  foodGapeShare: number;
+  /** Handling floor for the small class: a particle below foodMinShare * organism radius is worth only
+   *  foodSmallPenalty of its energy, so a giant cannot live on crumbs. Soft, not a hard block: with an
+   *  outright block the big morph cannot forage its own class fast enough and starves with a stock of
+   *  unconsumed large particles around it (measured over a sim hour: giants 332 -> 235 and shrinking,
+   *  228 large particles left uneaten). */
+  foodMinShare: number;
+  foodSmallPenalty: number;
+  /** Smallest gape any organism has, whatever its radius: keeps very small organisms able to eat. */
+  foodGapeMin: number;
 
   dt: number;
   accel: number;
@@ -96,6 +113,13 @@ export const DEFAULT_PARAMS: SimParams = {
   foodPerTick: 10,
   foodEnergy: 25,
   foodRadius: 3,
+  bigFoodRadius: 8,
+  bigFoodShare: 0.2,
+  bigFoodEnergy: 60,
+  foodGapeShare: 0.55,
+  foodMinShare: 0.25,
+  foodSmallPenalty: 0.15,
+  foodGapeMin: 4,
 
   dt: 1 / 60,
   accel: 4,
@@ -136,6 +160,13 @@ export function validateParams(p: SimParams): void {
   if (p.foodCap < p.foodFloor) problems.push('foodCap < foodFloor');
   if (p.foodPerTick < 0) problems.push('foodPerTick must be >= 0');
   if (p.foodEnergy <= 0) problems.push('foodEnergy must be positive');
+  if (p.bigFoodShare < 0 || p.bigFoodShare > 1) problems.push('bigFoodShare must be in [0,1]');
+  if (!(p.bigFoodRadius > p.foodRadius)) problems.push('bigFoodRadius must exceed foodRadius');
+  if (!(p.bigFoodEnergy > 0)) problems.push('bigFoodEnergy must be positive');
+  if (!(p.foodGapeShare > 0)) problems.push('foodGapeShare must be positive');
+  if (p.foodMinShare < 0 || p.foodMinShare > 1) problems.push('foodMinShare must be in [0,1]');
+  if (p.foodSmallPenalty < 0 || p.foodSmallPenalty > 1) problems.push('foodSmallPenalty must be in [0,1]');
+  if (!(p.foodGapeMin > 0)) problems.push('foodGapeMin must be positive');
   if (!(p.maxOrganisms >= 10)) problems.push('maxOrganisms must be >= 10');
   if (p.startOrganisms < 1 || p.startOrganisms > p.maxOrganisms) problems.push('startOrganisms out of range');
   if (!(p.dt > 0)) problems.push('dt must be positive');

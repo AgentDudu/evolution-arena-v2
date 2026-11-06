@@ -85,6 +85,12 @@ const expression = `(async () => {
       if (data[i] !== 11 || data[i + 1] !== 15 || data[i + 2] !== 20) ink++;
     }
 
+    // the large food class must be visible as its own colour, not merely "something on canvas"
+    let bigFoodInk = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] === 200 && data[i + 1] === 230 && data[i + 2] === 106) bigFoodInk++;
+    }
+
     // graph panels exist and painted: 4 uPlot roots + a histogram with visible bars
     const panels = window.arena.uPlotCount();
     const hist = document.getElementById('histogram');
@@ -157,6 +163,7 @@ const expression = `(async () => {
       food: afterTurbo.foodCount,
       meanGeneration: Number(afterTurbo.report().meanGeneration.toFixed(2)),
       inkRatio: Number((ink / (data.length / 4)).toFixed(4)),
+      bigFoodInkPixels: bigFoodInk,
       canvasPixels: [el.width, el.height],
       graph: {
         panels,
@@ -192,6 +199,20 @@ await new Promise<void>((resolve, reject) => {
   socket.addEventListener('open', () => resolve());
 });
 
+// A target appears in /json/list before its document has committed, so evaluating straight away can
+// land on the browser's blank start page (window.arena undefined, location about:blank).
+async function waitForApp(): Promise<boolean> {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const probe = await call('Runtime.evaluate', {
+      expression: 'String(!!(window.arena && document.getElementById("arena")))',
+      returnByValue: true,
+    });
+    if (String(probe.result?.result?.value) === 'true') return true;
+    await sleep(250);
+  }
+  return false;
+}
+
 function parse(data: unknown): Record<string, unknown> | null {
   try {
     return JSON.parse(String(data)) as Record<string, unknown>;
@@ -226,15 +247,38 @@ socket.addEventListener('message', (event: MessageEvent) => {
 });
 
 await call('Runtime.enable');
-const evaluated = await call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-console.log(JSON.stringify(evaluated, null, 2));
+// the probe has to run after the CDP call helpers exist, otherwise nextId is still in its TDZ
+if (!(await waitForApp())) problems.push('the app never loaded on the attached target');
+
+const evaluated = await call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });console.log(JSON.stringify(evaluated, null, 2));
 if (problems.length > 0) console.log('page exceptions:', problems);
 
 // the payload carries an `error` only when something actually threw; a null soak.error is normal,
 // so a substring search over the whole JSON would fail every run
-type Payload = { error?: string; soak?: { error?: string | null } };
+type Payload = {
+  error?: string;
+  soak?: { error?: string | null };
+  inkRatio?: number;
+  bigFoodInkPixels?: number;
+  graph?: { panels?: number; uPlotCanvases?: number; histogramInkPixels?: number };
+  inspector?: { text?: string; isolateToggled?: boolean };
+};
 const payload = ((evaluated.result as { result?: { value?: Payload } } | undefined)?.result?.value ?? {}) as Payload;
+
+// count the evidence instead of eyeballing the JSON: these are what the feature work is supposed to prove
+const gates: string[] = [];
+if (payload.error === undefined) {
+  if ((payload.inkRatio ?? 0) < 0.01) gates.push('arena canvas painted nothing');
+  if (!payload.bigFoodInkPixels) gates.push('the large food class was never painted');
+  if ((payload.graph?.panels ?? 0) < 4) gates.push('fewer than 4 graph panels');
+  if ((payload.graph?.uPlotCanvases ?? 0) < 4) gates.push('uPlot canvases missing');
+  if (!payload.graph?.histogramInkPixels) gates.push('the size histogram painted nothing');
+  if (payload.inspector?.isolateToggled !== true) gates.push('isolate did not toggle');
+  if (!payload.inspector?.text?.includes('lineage')) gates.push('inspector produced no genome');
+}
+if (gates.length > 0) console.log('gates failed:', gates);
 
 socket.close();
 browser.kill();
-process.exitCode = problems.length > 0 || payload.error !== undefined || payload.soak?.error != null ? 1 : 0;
+process.exitCode =
+  problems.length > 0 || payload.error !== undefined || payload.soak?.error != null || gates.length > 0 ? 1 : 0;
