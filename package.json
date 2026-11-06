@@ -1,0 +1,21 @@
+{
+  "name": "evolution-arena-v2",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "headless": "node scripts/headless.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.10",
+    "vitest": "^3.2.4"
+  }
+}
