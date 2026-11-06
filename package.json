@@ -10,6 +10,7 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:quick": "vitest run --exclude \"**/*.long.test.ts\"",
     "headless": "node scripts/headless.ts",
     "browser-check": "node scripts/browser-check.ts"
   },

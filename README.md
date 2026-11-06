@@ -15,7 +15,8 @@ save/share yet.
 ```sh
 pnpm install
 pnpm dev                          # http://localhost:5173 — whole world fitted to the window
-pnpm test                         # 58 tests, ~150 s (long arena runs dominate)
+pnpm test                         # everything: 58 tests, ~150 s (long arena runs dominate)
+pnpm test:quick                   # same suite minus *.long.test.ts: 46 tests, ~4 s — the edit loop
 pnpm typecheck
 node scripts/headless.ts 36000    # [ticks] [seed] [json params] -> report + species + state hash
 pnpm build && npx vite preview --port 4321 &

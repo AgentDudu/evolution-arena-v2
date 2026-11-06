@@ -295,23 +295,23 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
   what caught the weak initial seeding; sfc32 state is now filled with splitmix32.
 - `grid.test.ts` — `nearest()` matches a brute-force scan at cell sizes 16/64/200, `accepts`
   filter, `visit()` coverage, `clear()`.
-- `world.test.ts` — determinism at 5000 ticks, same hash for the same seed and params, different
+- `world.long.test.ts` — determinism at 5000 ticks, same hash for the same seed and params, different
   hash for a different seed or one changed param, `reset()` reproduces tick 0, hash moves every
   tick.
 - `invariants.test.ts` — no `Math.random(`/`Date.now(` in `src/core` or `src/sim` (grep test),
   param validation rejects nonsense, mutations always land in the declared gene range, mutation
   rate 0 is a true no-op, per-tick bounds on population/food/energy/positions/genes, generation
   gap (no child acts in its birth tick), reseed-on-empty both ways.
-- `behaviour.test.ts` — evolution is not noise: 6000 ticks keep a living population, reach mean
+- `behaviour.long.test.ts` — evolution is not noise: 6000 ticks keep a living population, reach mean
   generation ≥ 3, move at least three trait means more than 3% off their founding values, and end
   at different trait distributions for different seeds.
-- `bench.test.ts` — soft throughput guard (< 8 ms/tick at ~1000 organisms) that logs the numbers.
+- `bench.long.test.ts` — soft throughput guard (< 8 ms/tick at ~1000 organisms) that logs the numbers.
 - `camera.test.ts` — one uniform scale, letterboxing not stretching, tall/wide viewports, css↔device
   pixel round trip through world coordinates.
 - `loop.test.ts` — fixed-step accounting: 60 ticks per elapsed second at dt 1/60 (this caught a
   float loop that lost one tick every second), remainder carry, speed multiplies ticks without
   touching `dt`, catch-up cap, negative input ignored; plus palette bucket/key bounds.
-- `evolution.test.ts` — the work item 3 proof: `arena-1` runs 36000 ticks (10 sim-minutes) with
+- `evolution.long.test.ts` — the work item 3 proof: `arena-1` runs 36000 ticks (10 sim-minutes) with
   `reseedOnEmpty: false`, population never touches zero and stays > 50, and at least three gene
   means move by more than 8% of their range. Deliberately direction-free: which traits win is a
   property of the seed and food field, so hard-coding directions would make the test a tautology.
@@ -320,11 +320,17 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
   worker→host progress channel has a fixed 60 s timeout with no config knob (vitest#11082, #8164):
   one synchronous 60 s+ loop makes the whole run exit 1 with `Timeout calling "onTaskUpdate"`
   even though every test passed.
+- Slow files are named `*.long.test.ts`. `pnpm test` runs everything (~150 s, the proof);
+  `pnpm test:quick` excludes that glob (46 tests, ~4 s) and is the edit loop. The quick lane keeps
+  a 500-tick determinism check (`determinism.test.ts`) so the core invariant is never skipped.
 - `scripts/browser-check.ts` (`pnpm browser-check`, needs `vite preview`) — drives headless Edge over
   CDP: asserts no page exception, reports real-time ticks/s, turbo ticks/s, population/food/generation,
   canvas pixel size, and the fraction of canvas pixels that differ from the background (proof the
   frame is actually painted).
-- `predation.test.ts` — ratio boundary (1.24 vs 1.26), prey-minimum refuge, energy transfer tolerance.
+- `predation.test.ts` — the rule on a two-organism arena with food, movement and reproduction off:
+  ratio boundary, both size floors, overlap required, one kill per hunter, energy cap, predation
+  off. `predation.long.test.ts` — the item 4 proof: two radius morphs >= 4 units apart sustained
+  for over 5 sim-minutes.
 - `mutation.test.ts` — genes stay in range, same seed gives the same child genome, unrelated seed
   gives a different one.
 - `metrics.test.ts` — ring-buffer downsampling keeps first/last and monotonic time.
