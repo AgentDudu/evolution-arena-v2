@@ -16,8 +16,8 @@ running like a sandbox, and a side panel graphs population and trait statistics 
 ### Non-goals (v1)
 
 Multiplayer, accounts, server-authoritative sim, 3D, physics engine, GPU/WebGPU compute,
-neural-network brains, mobile-first design, sound. Each is listed later as a possible
-extension, not as a phase.
+neural-network brains, mobile-first design, sound, and a player-controlled organism. Each is
+listed later as a possible extension, not as a work item.
 
 ## 2. Decisions (confirmed with owner)
 
@@ -179,8 +179,9 @@ toggle (default on, spawns 20 random organisms from the seed), population cap, a
   Organisms: fill circle for body, thin ring for the sense radius only on the selected one.
 - Colour: hue from the neutral hue gene; ring colour from species id. Size reads the radius gene,
   so trait drift is visible without opening a graph.
-- Inspection zoom: scroll-wheel zoom around the cursor with a cap (1x–6x) and no follow camera;
-  it is a magnifier, the sim is identical either way.
+- Camera: fixed aerial only. No player avatar, no controllable organism (owner decision).
+  Scroll-zoom is a magnifier for inspection; there is no follow camera and no input-driven
+  movement, so the sim has exactly one actor type.
 - Render is decoupled from ticks: `rAF` draws interpolated positions (`x`,`y` vs `prevX`,`prevY`)
   so 1x speed looks smooth even when ticks land at 60 Hz.
 
@@ -380,6 +381,5 @@ Working software reviewed for architecture (ideas only, no code copied):
 - Benchmarks: uPlot sine-stream vs Chart.js/ECharts (uPlot's own bench, ~10% vs ~60% CPU),
   `renderer-benchmark` / Pixi bunnymark for canvas-vs-WebGL entity counts.
 
-Open question for the owner: does "add organisms and stuff like a sandbox game" include the
-player controlling one organism directly (Spore-cell-stage style)? Not in this plan — it needs a
-player entity, camera focus, and input-driven movement, which fights the fixed aerial view.
+Resolved: no player-controlled organism (owner decision, 2026-11-06). The arena is watched and
+edited, never inhabited — see §2 and §6.
