@@ -1,13 +1,23 @@
 // Headless arena run: prints the final report, the state hash, and throughput.
-// Usage: node scripts/headless.ts [ticks] [seed]
-import { DEFAULT_PARAMS } from '../src/core/config.ts';
+// Usage: node scripts/headless.ts [ticks] [seed] [json param overrides]
+import { DEFAULT_PARAMS, type SimParams } from '../src/core/config.ts';
 import { World } from '../src/sim/world.ts';
 
 const ticks = Number(process.argv[2] ?? 5000);
 const seed = process.argv[3] ?? DEFAULT_PARAMS.seed;
+function parseOverrides(raw: string | undefined): Partial<SimParams> {
+  if (raw === undefined) return {};
+  try {
+    return JSON.parse(raw) as Partial<SimParams>;
+  } catch {
+    throw new Error(`param overrides must be JSON, got: ${raw}`);
+  }
+}
+
+const overrides = parseOverrides(process.argv[4]);
 if (!Number.isInteger(ticks) || ticks < 0) throw new Error(`bad tick count ${process.argv[2]}`);
 
-const world = new World({ ...DEFAULT_PARAMS, seed });
+const world = new World({ ...DEFAULT_PARAMS, seed, ...overrides });
 const started = performance.now();
 for (let i = 0; i < ticks; i++) world.step();
 const ms = performance.now() - started;
@@ -16,7 +26,10 @@ const r = world.report();
 const m = r.means;
 console.log(
   `seed=${seed} ticks=${ticks} hash=${(world.stateHash() >>> 0).toString(16).padStart(8, '0')} ` +
-    `pop=${r.organisms} food=${r.food} energy=${r.energy.toFixed(0)} gen=${r.meanGeneration.toFixed(2)}`,
+    `pop=${r.organisms} food=${r.food} energy=${r.energy.toFixed(0)} gen=${r.meanGeneration.toFixed(2)} species=${r.speciesCount}`,
+);
+console.log(
+  `size classes: ${r.species.slice(0, 5).map((s) => `r${s.radius.toFixed(1)}×${s.count}`).join(' ') || 'none'}`,
 );
 console.log(
   `means radius=${m.radius.toFixed(2)} speed=${m.maxSpeed.toFixed(1)} sense=${m.senseRadius.toFixed(1)} ` +

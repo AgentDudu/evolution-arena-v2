@@ -26,6 +26,12 @@ export interface GeneMeans {
   hue: number;
 }
 
+export interface SpeciesClass {
+  radius: number;
+  hue: number;
+  count: number;
+}
+
 export interface WorldReport {
   tick: number;
   organisms: number;
@@ -33,6 +39,8 @@ export interface WorldReport {
   energy: number;
   meanGeneration: number;
   means: GeneMeans;
+  species: SpeciesClass[];
+  speciesCount: number;
 }
 
 const GENE_KEYS = Object.keys(GENES) as GeneName[];
@@ -212,6 +220,29 @@ export class World {
     }
     const n = this.alive || 1;
     for (const k of GENE_KEYS) means[k] /= n;
+
+    // shortcut: species are size classes (radius bins), the same axis Loeuille & Loreau structure
+    // food webs on; upgrade to trait-space clustering if the graph panel needs finer taxa.
+    const binWidth = this.params.speciesBinRadius;
+    const bins = new Map<number, { radius: number; hue: number; count: number }>();
+    for (let i = 0; i < this.alive; i++) {
+      const key = Math.floor(this.gene.radius[i] / binWidth);
+      let bin = bins.get(key);
+      if (bin === undefined) {
+        bin = { radius: 0, hue: 0, count: 0 };
+        bins.set(key, bin);
+      }
+      bin.radius += this.gene.radius[i];
+      bin.hue += this.gene.hue[i];
+      bin.count += 1;
+    }
+    const species: SpeciesClass[] = [];
+    for (const bin of bins.values()) {
+      if (bin.count < this.params.speciesMinCount) continue;
+      species.push({ radius: bin.radius / bin.count, hue: bin.hue / bin.count, count: bin.count });
+    }
+    species.sort((a, b) => b.count - a.count);
+
     return {
       tick: this.tick,
       organisms: this.alive,
@@ -219,15 +250,31 @@ export class World {
       energy,
       meanGeneration: gen / n,
       means,
+      species,
+      speciesCount: species.length,
     };
   }
 
   private threatSource = -1;
+  private huntTarget = -1;
   private foodAcc = 0;
 
   private readonly isThreat = (j: number): boolean => {
     const src = this.threatSource;
     return j !== src && this.gene.radius[j] >= this.gene.radius[src] * this.params.predationRatio;
+  };
+
+  /** j is prey for huntTarget when it is meaningfully smaller but still worth handling — the
+   *  size-ratio rule plus the gape floor of §5. */
+  private readonly isPrey = (j: number): boolean => {
+    const h = this.huntTarget;
+    const rj = this.gene.radius[j];
+    return (
+      j !== h &&
+      this.kill[j] === 0 &&
+      rj >= this.params.preyMinRadius &&
+      rj * this.params.predationRatio <= this.gene.radius[h]
+    );
   };
 
   /** One tick. Order is fixed and load-bearing: think reads tick-start state, deaths are
@@ -240,7 +287,7 @@ export class World {
     this.think();
     this.integrate();
     this.eat();
-    // predation is resolved between eat() and metabolise() in the food-web work item
+    if (this.params.predationEnabled) this.predation();
     this.metabolise();
     this.compact();
     this.reproduce();
@@ -284,6 +331,25 @@ export class World {
         const w = this.gene.seekFood[i];
         sx += (dx / d) * w;
         sy += (dy / d) * w;
+      }
+
+      // A smaller organism counts as food, so hunting reuses the seekFood weight instead of a new
+      // gene: chase whichever edible thing is nearer.
+      if (p.predationEnabled && this.gene.radius[i] >= p.predatorMinRadius) {
+        this.huntTarget = i;
+        const prey = this.orgGrid.nearest(px, py, sr, this.orgXAt, this.orgYAt, this.isPrey);
+        if (prey >= 0) {
+          const pdx = this.x[prey] - px;
+          const pdy = this.y[prey] - py;
+          const pd = Math.hypot(pdx, pdy);
+          const foodGap = food >= 0 ? Math.hypot(this.fx[food] - px, this.fy[food] - py) : Infinity;
+          if (pd < foodGap) {
+            const w = this.gene.seekFood[i];
+            const d = pd || 1;
+            sx = (pdx / d) * w;
+            sy = (pdy / d) * w;
+          }
+        }
       }
 
       const fw = this.gene.flee[i];
@@ -373,6 +439,30 @@ export class World {
       const cost = p.dt * (this.gene.metabolism[i] * upkeep + p.moveK * speed2 * Math.sqrt(mass));
       this.energy[i] -= cost;
       if (this.energy[i] <= 0) this.killOrganism(i);
+    }
+  }
+
+  /** Size-structured predation (PLAN §5): overlap plus a radius ratio, with a juvenile refuge for
+   *  hunters under preyMinRadius. One kill per hunter per tick, so a big organism cannot clear the
+   *  arena in a single tick. */
+  private predation(): void {
+    const p = this.params;
+    for (let i = 0; i < this.alive; i++) {
+      if (this.kill[i] !== 0) continue;
+      const r = this.gene.radius[i];
+      if (r < p.predatorMinRadius) continue;
+      this.huntTarget = i;
+      // overlap needs the pair within sum of radii, and no organism is bigger than GENES.radius.max
+      const prey = this.orgGrid.nearest(this.x[i], this.y[i], r + GENES.radius.max, this.orgXAt, this.orgYAt, this.isPrey);
+      if (prey < 0) continue;
+      const gap = r + this.gene.radius[prey];
+      const dx = this.x[prey] - this.x[i];
+      const dy = this.y[prey] - this.y[i];
+      if (dx * dx + dy * dy > gap * gap) continue;
+      this.energy[i] += p.preyEnergyFraction * this.energy[prey];
+      const cap = this.gene.reproThreshold[i] * 2;
+      if (this.energy[i] > cap) this.energy[i] = cap;
+      this.kill[prey] = 1;
     }
   }
 

@@ -4,7 +4,7 @@
 import { clamp } from './space.ts';
 import type { Seed } from './rng.ts';
 
-export const CONFIG_VERSION = 1;
+export const CONFIG_VERSION = 2;
 
 export type WallMode = 'bounce' | 'wrap';
 
@@ -65,8 +65,16 @@ export interface SimParams {
 
   predationEnabled: boolean;
   predationRatio: number;
+  /** Juveniles below this radius do not hunt. */
+  predatorMinRadius: number;
+  /** Gape/handling floor: prey smaller than this is ignored, which is the size refugium that lets a
+   *  dwarf morph survive alongside the giants (Loeuille & Loreau 2005, doi:10.1073/pnas.0408424102). */
   preyMinRadius: number;
   preyEnergyFraction: number;
+
+  /** Size-class species proxy: radius bins this wide, a class only counts with this many members. */
+  speciesBinRadius: number;
+  speciesMinCount: number;
 
   reseedOnEmpty: boolean;
   metricEvery: number;
@@ -106,10 +114,14 @@ export const DEFAULT_PARAMS: SimParams = {
   mutationRate: 0.15,
   mutationSigma: 0.05,
 
-  predationEnabled: false,
+  predationEnabled: true,
   predationRatio: 1.25,
-  preyMinRadius: 6,
+  predatorMinRadius: 6,
+  preyMinRadius: 9,
   preyEnergyFraction: 0.5,
+
+  speciesBinRadius: 1.5,
+  speciesMinCount: 8,
 
   reseedOnEmpty: true,
   metricEvery: 15,
@@ -133,6 +145,11 @@ export function validateParams(p: SimParams): void {
     if (g.def < g.min || g.def > g.max) problems.push(`gene ${name} default out of range`);
   }
   if (p.mutationRate < 0 || p.mutationRate > 1) problems.push('mutationRate must be in [0,1]');
+  if (p.predationRatio < 1) problems.push('predationRatio must be >= 1');
+  if (p.preyMinRadius < 0 || p.predatorMinRadius < 0) problems.push('predation size floors must be >= 0');
+  if (p.preyEnergyFraction <= 0 || p.preyEnergyFraction > 1) problems.push('preyEnergyFraction must be in (0,1]');
+  if (!(p.speciesBinRadius > 0)) problems.push('speciesBinRadius must be positive');
+  if (!(p.speciesMinCount >= 1)) problems.push('speciesMinCount must be >= 1');
   if (p.reproShareParent <= 0 || p.reproShareParent > 1) problems.push('reproShareParent must be in (0,1]');
   if (problems.length > 0) throw new Error(`invalid SimParams:\n  ${problems.join('\n  ')}`);
 }

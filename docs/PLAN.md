@@ -1,6 +1,7 @@
 # Evolution Arena — Implementation Plan
 
-Status: planning, nothing implemented.
+Status: items 1-4 of §14 are merged on `develop` (deterministic core, visible arena, selection
+over 10 sim-minutes, predation + size morphs). Items 5-8 are not started.
 Branch: `docs/evolution-arena-plan` (from `develop`).
 Date: 2026-11-06.
 
@@ -153,10 +154,16 @@ nothing can max every gene. Sensing is expensive, speed is expensive, size is ex
 ### Predation (agar.io rule, size-structured)
 
 On overlap, `A` eats `B` when `radiusA / radiusB >= PREDATION_RATIO` (default 1.25) **and**
-`A.radius >= PREY_MIN` — this leaves a refuge for juveniles, which is what stops the arena
-from collapsing into one giant organism in a few hundred ticks. Size-structured predation plus
-allometric metabolism is exactly the mechanism that produces food webs in
-Loeuille & Loreau 2005 (PNAS, doi:10.1073/pnas.0408424102).
+`B.radius >= PREY_MIN_RADIUS` (default **9**) **and** `A.radius >= PREDATOR_MIN_RADIUS` (default 6).
+The predator floor keeps juveniles from hunting; the prey floor is a gape/handling limit and is the
+size refugium a dwarf morph survives in. Size-structured predation plus allometric metabolism is
+the mechanism that produces food webs in Loeuille & Loreau 2005 (PNAS, doi:10.1073/pnas.0408424102).
+
+Measured, not assumed: with only the predator floor, size selection ran away to the top of the
+range (mean radius 15.25 of a 4-16 range, every surviving class a giant). Adding the gape floor
+and raising it to 9 gave the two-morph outcome §14 item 4 asks for. One kill per hunter per tick.
+Prey is chased with the existing `seekFood` weight (an edible organism is simply nearer food), so
+the §5 gene list did not change.
 
 ### Mutation
 
@@ -267,6 +274,9 @@ all sim input through messages and complicates the sandbox tools).
 | Headless 36000 ticks (10 sim-min), `reseedOnEmpty: false` | `arena-1` pop 1559, gen 13.1; `long-2` pop 1777, gen 8.8; `long-3` pop 1450, gen 13.1 — nobody went extinct |
 | Mean genome drift, `arena-1` tick 500 → 36000 | radius 10.6 → 14.1, sense 91 → 34, metabolism 1.04 → 0.63, seek 0.61 → 0.76, flee 0.53 → 0.36 |
 | Food at 10 sim-min | 36–76 particles: the arena is food-limited, which is what drives the drift above |
+| Tick cost with predation on | 2.1–2.8 ms/tick at pop 1400–1800 (1.3–1.9 without); bench @1148 organisms 1.63 ms |
+| Headless 36000 ticks with predation | `arena-1` pop 1494, 6 size classes r5.3–r15.6 (giants 940+425, dwarfs 85+19); `morph-1` pop 1425, 6 classes; `long-2` pop 1777, 7 classes, mean radius 7.9 — a different food web per seed |
+| Browser turbo with predation | ~208 ticks/s at 49 fps (was ~400): one extra grid query per hunter per tick is the whole gap |
 | Bundle | 6.45 kB gzipped (budget 200 kB) |
 
 So the real budget is **not met yet**: 34k ticks/min against a 300k target. One tick at 60 Hz is
@@ -373,11 +383,15 @@ Each item is independently mergeable to `develop` and leaves the app running.
 | 1 | Deterministic core | `rng`, `config`, `space`, `grid`, SoA world, tick pipeline skeleton, headless runner | same seed → same `stateHash` at tick 5000; grid matches brute force | M |
 | 2 | Visible arena | Canvas 2D aerial renderer, DPR/resize, fitted world, food + movement + energy + death, play/pause/step/speed | 100 organisms visible, whole world on screen, 60 fps, organisms starve and die | M |
 | 3 | Genome + selection | Full gene set, allometric costs, fission with mutation, hue marker, lineage ids, generations | population survives > 10 sim-minutes and gene means visibly drift (test asserts drift, not direction) | M |
-| 4 | Predation & food web | size-ratio eats, juvenile refuge, energy transfer, species centroids | two size morphs coexist for > 5 sim-minutes; species count line is non-trivial | M |
+| 4 | Predation & food web | size-ratio eats, juvenile + gape size floors, energy transfer, species as size classes | two size morphs coexist for > 5 sim-minutes; species count line is non-trivial | M |
 | 5 | Sandbox tools | paint food, spawn from trait editor, delete, live params, events, seed/reset | an engineered lineage placed mid-run visibly competes with the wild population | L |
 | 6 | Graphs & inspector | uPlot panels (population, energy, trait means, species), histogram, per-organism inspector + isolate/follow | all panels update live and survive a 1-hour turbo run without heap growth | M |
 | 7 | Save & share | autosave, named slots, seed+params+log replay, share link, CSV/JSON export | a share link reproduces the sender's `stateHash` at its tick count | M |
 | 8 | Hardening & polish | perf pass vs budgets, keyboard shortcuts, mobile/touch basics, README how-to-run, error boundary, `precommit-scan` hook | budgets in §10 met on a mid-range laptop; fresh clone runs with `pnpm i && pnpm dev` | M |
+
+Done so far: items 1-4 are merged. Item 4 evidence — `test/predation.test.ts` holds the rule
+(overlap + ratio + both size floors + one kill per hunter + energy cap) and shows two radius
+morphs separated by >= 4 units coexisting for over 5 sim-minutes; the HUD prints the class count.
 
 Order is dependency order, not a promise about commit content. Items 1-4 make evolution happen;
 5-7 make it a sandbox you can manipulate and share; 8 makes it pleasant and fast.
