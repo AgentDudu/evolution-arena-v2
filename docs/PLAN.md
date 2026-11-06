@@ -142,7 +142,8 @@ move cost/tick   = dt * MOVE_K * speed^2 * mass^0.5
 food gain        = +25 energy per particle
 eat organism     = +0.5 * victim.energy, victim dies
 reproduction     = allowed at energy >= reproThreshold and age >= MIN_AGE;
-                   parent pays 0.55 * reproThreshold, child starts at 0.45 * reproThreshold
+                   parent pays reproShareParent * threshold, child starts at that cost
+                   * reproShareChild
 death            = energy <= 0, or eaten, or age > MAX_AGE (default off)
 ```
 
@@ -261,8 +262,11 @@ all sim input through messages and complicates the sandbox tools).
 | 5000-tick run, seed `arena-2` | pop 1156, food 156, mean gen 4.37, `stateHash c9da68e3` |
 | Trait drift over 5000 ticks (`arena-1`) | radius 8 → 12.05, senseRadius 80 → 50.5, metabolism 1.00 → 0.85, maxSpeed 60 → 94.7 |
 | Browser, Edge headless 1280x720, speed 1x | 60 fps, 60 ticks/s, 0.8–0.9 ms/tick, canvas ink 8.7% of pixels |
-| Browser, turbo (no render) | ~590 ticks/s; UI falls to 2–3 fps because the frame budget is 240 ticks |
+| Browser, turbo (time-boxed 12 ms/frame) | ~400 ticks/s at 49 fps — UI keeps drawing; throughput now scales with ms/tick, so the perf pass raises it directly |
 | Browser long run (tick 5521) | pop 1226, food 165, mean gen 4.11 — same regime as headless |
+| Headless 36000 ticks (10 sim-min), `reseedOnEmpty: false` | `arena-1` pop 1559, gen 13.1; `long-2` pop 1777, gen 8.8; `long-3` pop 1450, gen 13.1 — nobody went extinct |
+| Mean genome drift, `arena-1` tick 500 → 36000 | radius 10.6 → 14.1, sense 91 → 34, metabolism 1.04 → 0.63, seek 0.61 → 0.76, flee 0.53 → 0.36 |
+| Food at 10 sim-min | 36–76 particles: the arena is food-limited, which is what drives the drift above |
 | Bundle | 6.45 kB gzipped (budget 200 kB) |
 
 So the real budget is **not met yet**: 34k ticks/min against a 300k target. One tick at 60 Hz is
@@ -297,6 +301,11 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
 - `loop.test.ts` — fixed-step accounting: 60 ticks per elapsed second at dt 1/60 (this caught a
   float loop that lost one tick every second), remainder carry, speed multiplies ticks without
   touching `dt`, catch-up cap, negative input ignored; plus palette bucket/key bounds.
+- `evolution.test.ts` — the work item 3 proof: `arena-1` runs 36000 ticks (10 sim-minutes) with
+  `reseedOnEmpty: false`, population never touches zero and stays > 50, and at least three gene
+  means move by more than 8% of their range. Deliberately direction-free: which traits win is a
+  property of the seed and food field, so hard-coding directions would make the test a tautology.
+  Two more seeds are checked at 10000 ticks. Slowest file in the suite (~105 s).
 - `scripts/browser-check.ts` (`pnpm browser-check`, needs `vite preview`) — drives headless Edge over
   CDP: asserts no page exception, reports real-time ticks/s, turbo ticks/s, population/food/generation,
   canvas pixel size, and the fraction of canvas pixels that differ from the background (proof the
