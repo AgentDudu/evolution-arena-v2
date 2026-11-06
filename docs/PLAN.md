@@ -251,14 +251,43 @@ If the budget breaks, in order: raise the population cap down first (cap 1200), 
 into a Web Worker with a transferred state buffer (kept as an extension, not a phase — it forces
 all sim input through messages and complicates the sandbox tools).
 
+### Measured baseline (working core, Node 24, this machine)
+
+| Measurement | Value |
+| --- | --- |
+| Tick cost @ ~1150 organisms + ~125 food | 1.75 ms/tick |
+| Headless throughput | ~570 ticks/s (~34k ticks/min) |
+| 5000-tick run, seed `arena-1` | pop 1051, food 140, mean gen 4.14, `stateHash 7b576f95` |
+| 5000-tick run, seed `arena-2` | pop 1156, food 156, mean gen 4.37, `stateHash c9da68e3` |
+| Trait drift over 5000 ticks (`arena-1`) | radius 8 → 12.05, senseRadius 80 → 50.5, metabolism 1.00 → 0.85, maxSpeed 60 → 94.7 |
+
+So the real budget is **not met yet**: 34k ticks/min against a 300k target. One tick at 60 Hz is
+comfortable (1.75 ms of a 16.7 ms frame), but turbo fast-forward at 8× is not. Before any
+architecture change, the cheap candidates are: the threat query in `think()` scans up to
+`senseRadius` on the organism grid (drop the flee scan when `flee == 0`, which most organisms
+have after a few hundred ticks), the food grid's stale cells after a swap-remove, and reusing one
+scratch buffer for grid buckets. Re-measure after each.
+
 ## 11. Testing
 
-- `rng.test.ts` — golden sequence for a seed; no `Math.random` anywhere in `src/sim` (grep test).
-- `grid.test.ts` — grid query equals brute-force radius query on 200 random points.
-- `world.test.ts` — determinism: identical seed+params gives identical `stateHash` at tick 5000;
-  changing one param changes it.
-- `energy.test.ts` — maintenance/move/eat accounting; energy never negative after clamping;
-  population cannot exceed the cap; food cannot exceed its cap.
+Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
+
+- `rng.test.ts` — golden stream hash for `arena-1` (0x27f39617), same-seed replay, uniformity,
+  and a **seed-correlation gate**: `arena-1` vs `arena-2` must stay under |r| = 0.05. That gate is
+  what caught the weak initial seeding; sfc32 state is now filled with splitmix32.
+- `grid.test.ts` — `nearest()` matches a brute-force scan at cell sizes 16/64/200, `accepts`
+  filter, `visit()` coverage, `clear()`.
+- `world.test.ts` — determinism at 5000 ticks, same hash for the same seed and params, different
+  hash for a different seed or one changed param, `reset()` reproduces tick 0, hash moves every
+  tick.
+- `invariants.test.ts` — no `Math.random(`/`Date.now(` in `src/core` or `src/sim` (grep test),
+  param validation rejects nonsense, mutations always land in the declared gene range, mutation
+  rate 0 is a true no-op, per-tick bounds on population/food/energy/positions/genes, generation
+  gap (no child acts in its birth tick), reseed-on-empty both ways.
+- `behaviour.test.ts` — evolution is not noise: 6000 ticks keep a living population, reach mean
+  generation ≥ 3, move at least three trait means more than 3% off their founding values, and end
+  at different trait distributions for different seeds.
+- `bench.test.ts` — soft throughput guard (< 8 ms/tick at ~1000 organisms) that logs the numbers.
 - `predation.test.ts` — ratio boundary (1.24 vs 1.26), prey-minimum refuge, energy transfer tolerance.
 - `mutation.test.ts` — genes stay in range, same seed gives the same child genome, unrelated seed
   gives a different one.
@@ -284,8 +313,7 @@ it that way and still puts a gate in place so nothing can leak later.
   1. `git status --short` — confirm nothing unexpected is staged (no `.env`, no browser profile,
      no downloads, no `.pem`/`.key`, no `*.local`).
   2. `git diff --cached | gitleaks protect --staged --no-banner` when `gitleaks` is on PATH
-     (not installed on this machine yet — `winget install Gitleaks.Gitleaks` or
-     `scoop install gitleaks`); otherwise the script falls back to a high-entropy + pattern grep
+     (gitleaks 8.30.1 is installed here); otherwise the script falls back to a high-entropy + pattern grep
      for `AKIA[0-9A-Z]{16}`, `gh[pousr]_[A-Za-z0-9]{20,}`, `-----BEGIN .*PRIVATE KEY`,
      `(password|secret|token|api[_-]?key)\s*[:=]`, and long base64 runs.
   3. Confirm `git config user.email` is the intended public author email.

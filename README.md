@@ -6,7 +6,16 @@ the whole arena - no follow camera.
 
 Planning: [docs/PLAN.md](docs/PLAN.md)
 
-Not implemented yet.
+Status: deterministic simulation core exists (seeded PRNG, spatial hash, fixed-step tick
+pipeline, headless runner, 29 tests). No renderer or UI yet.
+
+```sh
+pnpm install
+pnpm dev                          # browser shell (no canvas yet)
+pnpm test                         # 29 tests, ~40 s
+pnpm typecheck
+node scripts/headless.ts 5000     # seed, ticks -> report + state hash + throughput
+```
 
 ## Secret gate
 
@@ -16,6 +25,6 @@ Every commit is scanned. Enable the hook once per clone:
 git config core.hooksPath .githooks
 ```
 
-It runs `gitleaks protect --staged` (install: `scoop install gitleaks`) and falls back to a
-pattern + high-entropy scan when gitleaks is missing. To run it by hand:
+It runs `gitleaks protect --staged` (gitleaks 8.30.1 is installed on this machine) and falls back
+to a pattern + high-entropy scan when gitleaks is missing. To run it by hand:
 `node scripts/precommit-scan.mjs`.
