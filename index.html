@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Evolution Arena</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --fg: #e8eef6;
+        --dim: #8c9cb0;
+        --bg: #0b0f14;
+        --panel: #131a23;
+        --line: #2a3644;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #arena { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+      .panel {
+        position: fixed; left: 12px; background: color-mix(in srgb, var(--panel) 85%, transparent);
+        border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; backdrop-filter: blur(4px);
+      }
+      #hud { top: 12px; min-width: 260px; }
+      #controls { bottom: 12px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; max-width: calc(100vw - 24px); }
+      #hint { bottom: 12px; right: 12px; left: auto; color: var(--dim); max-width: 320px; }
+      b { color: var(--fg); }
+      span.k { color: var(--dim); }
+      button, input[type='text'] {
+        font: inherit; color: var(--fg); background: #1b2530; border: 1px solid var(--line);
+        border-radius: 6px; padding: 4px 8px;
+      }
+      button[aria-pressed='true'] { background: #2f6f4f; border-color: #3f8f68; }
+      label { color: var(--dim); display: inline-flex; gap: 4px; align-items: center; }
+    </style>
+  </head>
+  <body>
+    <canvas id="arena" aria-label="Aerial view of the whole arena"></canvas>
+
+    <div class="panel" id="hud">loading…</div>
+
+    <div class="panel" id="controls">
+      <button id="playpause" aria-pressed="true">pause</button>
+      <button id="step">step</button>
+      <span class="k">speed</span>
+      <button data-speed="1" aria-pressed="true">1x</button>
+      <button data-speed="2" aria-pressed="false">2x</button>
+      <button data-speed="4" aria-pressed="false">4x</button>
+      <button data-speed="8" aria-pressed="false">8x</button>
+      <button id="turbo" aria-pressed="false">turbo</button>
+      <label>seed <input id="seed" type="text" size="10" /></label>
+      <button id="reset">reset</button>
+    </div>
+
+    <div class="panel" id="hint">
+      click = drop food · shift+click = inspect organism · space = pause · n = step · 1/2/4/8 = speed · t = turbo
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

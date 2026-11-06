@@ -260,6 +260,10 @@ all sim input through messages and complicates the sandbox tools).
 | 5000-tick run, seed `arena-1` | pop 1051, food 140, mean gen 4.14, `stateHash 7b576f95` |
 | 5000-tick run, seed `arena-2` | pop 1156, food 156, mean gen 4.37, `stateHash c9da68e3` |
 | Trait drift over 5000 ticks (`arena-1`) | radius 8 → 12.05, senseRadius 80 → 50.5, metabolism 1.00 → 0.85, maxSpeed 60 → 94.7 |
+| Browser, Edge headless 1280x720, speed 1x | 60 fps, 60 ticks/s, 0.8–0.9 ms/tick, canvas ink 8.7% of pixels |
+| Browser, turbo (no render) | ~590 ticks/s; UI falls to 2–3 fps because the frame budget is 240 ticks |
+| Browser long run (tick 5521) | pop 1226, food 165, mean gen 4.11 — same regime as headless |
+| Bundle | 6.45 kB gzipped (budget 200 kB) |
 
 So the real budget is **not met yet**: 34k ticks/min against a 300k target. One tick at 60 Hz is
 comfortable (1.75 ms of a 16.7 ms frame), but turbo fast-forward at 8× is not. Before any
@@ -288,6 +292,15 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
   generation ≥ 3, move at least three trait means more than 3% off their founding values, and end
   at different trait distributions for different seeds.
 - `bench.test.ts` — soft throughput guard (< 8 ms/tick at ~1000 organisms) that logs the numbers.
+- `camera.test.ts` — one uniform scale, letterboxing not stretching, tall/wide viewports, css↔device
+  pixel round trip through world coordinates.
+- `loop.test.ts` — fixed-step accounting: 60 ticks per elapsed second at dt 1/60 (this caught a
+  float loop that lost one tick every second), remainder carry, speed multiplies ticks without
+  touching `dt`, catch-up cap, negative input ignored; plus palette bucket/key bounds.
+- `scripts/browser-check.ts` (`pnpm browser-check`, needs `vite preview`) — drives headless Edge over
+  CDP: asserts no page exception, reports real-time ticks/s, turbo ticks/s, population/food/generation,
+  canvas pixel size, and the fraction of canvas pixels that differ from the background (proof the
+  frame is actually painted).
 - `predation.test.ts` — ratio boundary (1.24 vs 1.26), prey-minimum refuge, energy transfer tolerance.
 - `mutation.test.ts` — genes stay in range, same seed gives the same child genome, unrelated seed
   gives a different one.
