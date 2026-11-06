@@ -43,6 +43,9 @@ export interface WorldReport {
   speciesCount: number;
   /** Every size bin, ascending by radius, including classes too small to count as a species. */
   sizeBins: SpeciesClass[];
+  /** Sandbox-released organisms and their descendants alive right now. */
+  engineered: number;
+  engineeredMeanRadius: number;
 }
 
 const GENE_KEYS = Object.keys(GENES) as GeneName[];
@@ -76,6 +79,10 @@ export class World {
   readonly gene: Record<GeneName, Float64Array>;
 
   readonly kill: Uint8Array;
+  /** 0 = wild (seeded or born in the wild), 1 = placed by the sandbox tool.
+   *  moveOrganism copies it, so every descendant of a released organism carries it: that is how an
+   *  engineered lineage is counted against the wild population without walking the ancestry. */
+  readonly origin: Uint8Array;
 
   private readonly fxAt = (i: number): number => this.fx[i];
   private readonly fyAt = (i: number): number => this.fy[i];
@@ -115,6 +122,7 @@ export class World {
     this.gen = new Float64Array(this.cap);
     this.lineage = new Int32Array(this.cap);
     this.kill = new Uint8Array(this.cap);
+    this.origin = new Uint8Array(this.cap);
     this.gene = Object.fromEntries(GENE_KEYS.map((k) => [k, new Float64Array(this.cap)])) as Record<
       GeneName,
       Float64Array
@@ -156,6 +164,34 @@ export class World {
     this.vx[i] = 0;
     this.vy[i] = 0;
     this.kill[i] = 0;
+    this.origin[i] = 0;
+    return i;
+  }
+
+  /** Release one organism with an exact genome mid-run. Values outside a gene's range are clamped, so
+   *  a trait editor cannot invent a creature the genetics cannot express. Returns its slot, or -1 when
+   *  the arena is full. */
+  engineer(x: number, y: number, genes: Partial<Record<GeneName, number>>): number {
+    if (this.alive >= this.cap) return -1;
+    const i = this.alive++;
+    for (const k of GENE_KEYS) {
+      const spec = GENES[k];
+      const value = genes[k] ?? spec.def;
+      this.gene[k][i] = clamp(value, spec.min, spec.max);
+    }
+    const r = this.gene.radius[i];
+    this.x[i] = clamp(x, r, this.params.worldWidth - r);
+    this.y[i] = clamp(y, r, this.params.worldHeight - r);
+    this.prevX[i] = this.x[i];
+    this.prevY[i] = this.y[i];
+    this.energy[i] = this.gene.reproThreshold[i] * 0.6;
+    this.age[i] = 0;
+    this.gen[i] = 0;
+    this.lineage[i] = this.nextLineage++;
+    this.vx[i] = 0;
+    this.vy[i] = 0;
+    this.kill[i] = 0;
+    this.origin[i] = 1;
     return i;
   }
 
@@ -227,6 +263,7 @@ export class World {
     this.gen[to] = this.gen[from];
     this.lineage[to] = this.lineage[from];
     this.kill[to] = this.kill[from];
+    this.origin[to] = this.origin[from];
     for (const k of GENE_KEYS) this.gene[k][to] = this.gene[k][from];
   }
 
@@ -235,10 +272,16 @@ export class World {
     for (const k of GENE_KEYS) means[k] = 0;
     let energy = 0;
     let gen = 0;
+    let engineered = 0;
+    let engineeredRadius = 0;
     for (let i = 0; i < this.alive; i++) {
       energy += this.energy[i];
       gen += this.gen[i];
       for (const k of GENE_KEYS) means[k] += this.gene[k][i];
+      if (this.origin[i] === 1) {
+        engineered++;
+        engineeredRadius += this.gene.radius[i];
+      }
     }
     const n = this.alive || 1;
     for (const k of GENE_KEYS) means[k] /= n;
@@ -282,6 +325,8 @@ export class World {
       species,
       speciesCount: species.length,
       sizeBins,
+      engineered,
+      engineeredMeanRadius: engineered > 0 ? engineeredRadius / engineered : 0,
     };
   }
 
