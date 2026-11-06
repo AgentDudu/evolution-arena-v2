@@ -1,0 +1,6 @@
+#!/bin/sh
+# Installed with: git config core.hooksPath .githooks
+node scripts/precommit-scan.mjs || {
+  echo "commit blocked by precommit-scan (secrets or blocked files)" >&2
+  exit 1
+}
