@@ -156,7 +156,7 @@ function frame(now: number): void {
     windowSimMs = 0;
     lastHud = now;
     const lines = [
-      `tick ${report.tick} · pop ${report.organisms} · food ${report.food} · gen ${report.meanGeneration.toFixed(2)}`,
+      `tick ${report.tick} · pop ${report.organisms} · food ${report.food} · gen ${report.meanGeneration.toFixed(2)} · species ${report.speciesCount}`,
       `${fps} fps · ${turbo ? 'turbo' : `${speed}x`} · ${msPerTick.toFixed(2)} ms/tick`,
       // means move as selection acts, so they are the quickest visible sign evolution is happening
       `mean genome · r ${m.radius.toFixed(1)} · v ${m.maxSpeed.toFixed(0)} · sense ${m.senseRadius.toFixed(0)} · meta ${m.metabolism.toFixed(2)} · seek ${m.seekFood.toFixed(2)} · flee ${m.flee.toFixed(2)}`,

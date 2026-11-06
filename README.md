@@ -6,24 +6,25 @@ the whole arena - no follow camera.
 
 Planning: [docs/PLAN.md](docs/PLAN.md)
 
-Status: the arena is visible and evolving. Deterministic core (seeded PRNG, spatial hash,
-fixed-tick pipeline), aerial Canvas 2D renderer with play/pause/step/speed/turbo, and selection
-that measurably moves the mean genome over 10 sim-minutes. No graphs, param editors, or save/share
-yet.
+Status: items 1-4 of the plan are in. Deterministic core (seeded PRNG, spatial hash, fixed-tick
+pipeline), aerial Canvas 2D renderer with play/pause/step/speed/turbo, selection that measurably
+moves the mean genome over 10 sim-minutes, and size-structured predation that keeps two radius morphs
+(giants ~15.6, dwarfs ~5-7) side by side for more than 5 sim-minutes. No graphs, param editors, or
+save/share yet.
 
 ```sh
 pnpm install
 pnpm dev                          # http://localhost:5173 — whole world fitted to the window
-pnpm test                         # 47 tests, ~100 s (the long-run evolution tests dominate)
+pnpm test                         # 58 tests, ~150 s (long arena runs dominate)
 pnpm typecheck
-node scripts/headless.ts 36000    # seed, ticks -> report + state hash + throughput
+node scripts/headless.ts 36000    # [ticks] [seed] [json params] -> report + species + state hash
 pnpm build && npx vite preview --port 4321 &
 pnpm browser-check                # headless Edge over CDP: ticks/s, turbo, painted-pixel check
 ```
 
 Controls: click = drop food, shift+click = inspect an organism (shows its sense radius), space =
 pause, n = one tick, s = cycle speed 1x → 2x → 4x → 8x, t = turbo (ticks until the frame budget is
-spent, still draws).
+spent, still draws). The HUD prints the live species-class count and the population mean genome.
 
 ## Secret gate
 
