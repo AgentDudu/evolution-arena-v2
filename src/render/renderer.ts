@@ -20,10 +20,12 @@ const ARENA_EDGE = '#2a3644';
 const FOOD_COLOR = '#5fd08a';
 const BIG_FOOD_COLOR = '#c8e66a';
 const DIM_ORGANISM = '#1d2530';
+const ENGINEERED_RING = '#ffe36b';
 
 export class Renderer {
   private readonly buckets: number[][] = Array.from({ length: HUE_BUCKETS * ENERGY_BANDS }, () => []);
   private readonly dim: number[] = [];
+  private readonly engineered: number[] = [];
   private readonly canvas: HTMLCanvasElement;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -74,12 +76,14 @@ export class Renderer {
 
     for (const bucket of this.buckets) bucket.length = 0;
     this.dim.length = 0;
+    this.engineered.length = 0;
     const isolate = opts.isolateLineage >= 0;
     for (let i = 0; i < world.alive; i++) {
       if (isolate && world.lineage[i] !== opts.isolateLineage) {
         this.dim.push(i);
         continue;
       }
+      if (world.origin[i] === 1) this.engineered.push(i);
       const fraction = world.energy[i] / (world.gene.reproThreshold[i] * 2);
       this.buckets[paletteKey(world.gene.hue[i], fraction)]?.push(i);
     }
@@ -110,6 +114,22 @@ export class Renderer {
         ctx.arc(x, y, r, 0, Math.PI * 2);
       }
       ctx.fill();
+    }
+
+    if (this.engineered.length > 0) {
+      // a released organism and its descendants carry origin 1, so the engineered lineage has to be
+      // findable in the aerial view without inspecting each one
+      ctx.strokeStyle = ENGINEERED_RING;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (const i of this.engineered) {
+        const x = toPixelX(camera, world.prevX[i] + (world.x[i] - world.prevX[i]) * opts.alpha);
+        const y = toPixelY(camera, world.prevY[i] + (world.y[i] - world.prevY[i]) * opts.alpha);
+        const r = Math.max(0.8, world.gene.radius[i] * camera.scale) + 2;
+        ctx.moveTo(x + r, y);
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+      }
+      ctx.stroke();
     }
 
     if (opts.trail !== null && opts.trailLength > 1) {

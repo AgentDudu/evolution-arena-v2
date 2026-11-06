@@ -1,11 +1,10 @@
 // Browser entry: world + fixed-step loop + aerial renderer + graphs + organism inspector + the
-// controls needed to watch evolution happen. Sandbox depth (trait editor, events, edit log) is the
-// next work item.
+// sandbox release tool. Sim param editing and events are not wired up yet.
 
 import { Charts } from './render/charts.ts';
 import { MetricsHistory } from './sim/history.ts';
 
-import { DEFAULT_PARAMS, GENES, GENE_NAMES, nextSpeed, type SimParams } from './core/config.ts';
+import { DEFAULT_PARAMS, GENES, GENE_NAMES, nextSpeed, type GeneName, type SimParams } from './core/config.ts';
 import { cssToDevice, fitCamera, toWorldX, toWorldY, type Camera } from './render/camera.ts';
 import { Renderer } from './render/renderer.ts';
 import { advance, createClock, runTimeBoxed } from './sim/loop.ts';
@@ -21,6 +20,10 @@ const playPause = document.getElementById('playpause') as HTMLButtonElement;
 const stepButton = document.getElementById('step') as HTMLButtonElement;
 const turboButton = document.getElementById('turbo') as HTMLButtonElement;
 const resetButton = document.getElementById('reset') as HTMLButtonElement;
+const engineerGenes = document.getElementById('engineer-genes') as HTMLElement;
+const engineerCount = document.getElementById('engineer-count') as HTMLInputElement;
+const engineerArm = document.getElementById('engineer-arm') as HTMLButtonElement;
+const engineerWild = document.getElementById('engineer-wild') as HTMLButtonElement;
 const speedButtons = [...document.querySelectorAll<HTMLButtonElement>('button[data-speed]')];
 
 const urlSeed = new URLSearchParams(location.search).get('seed');
@@ -39,6 +42,56 @@ let isolate = false;
 // Slots move when the population array compacts, so the tracked organism is a lineage id and its
 // slot is looked up again each frame.
 let selectedLineage = -1;
+
+// The release tool: sliders set a genome, arming makes the next canvas click place it. Values are kept
+// as a partial genome and clamped inside World.engineer, so the editor cannot express a creature the
+// genetics cannot.
+const genome: Partial<Record<GeneName, number>> = {};
+const sliderFor = new Map<GeneName, HTMLInputElement>();
+const readoutFor = new Map<GeneName, HTMLElement>();
+for (const name of GENE_NAMES) {
+  const spec = GENES[name];
+  const label = document.createElement('label');
+  label.textContent = name;
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = String(spec.min);
+  input.max = String(spec.max);
+  input.step = spec.max <= 1 ? '0.05' : String(Math.round(((spec.max - spec.min) / 100) * 100) / 100);
+  input.value = String(spec.def);
+  input.id = `engineer-${name}`;
+  label.htmlFor = input.id;
+  input.setAttribute('aria-label', name);
+  const value = document.createElement('span');
+  value.className = 'v';
+  value.textContent = formatGene(name, spec.def);
+  genome[name] = spec.def;
+  input.addEventListener('input', () => {
+    genome[name] = Number(input.value);
+    value.textContent = formatGene(name, Number(input.value));
+  });
+  sliderFor.set(name, input);
+  readoutFor.set(name, value);
+  label.append(input, value);
+  engineerGenes.append(label);
+}
+
+/** Start from what the population already runs on, then change one trait. Gene defaults are a bad
+ *  starting point on purpose of measurement: a genome off the gene defaults (senseRadius 80 costs
+ *  0.0008 * sense^2 = 5 energy per tick against the ~1.7 the population settled on) gets eaten or
+ *  starves inside 100 ticks, which reads as a broken tool rather than as selection. */
+function setGenomeFrom(values: Partial<Record<GeneName, number>>): void {
+  for (const name of GENE_NAMES) {
+    const spec = GENES[name];
+    const v = Math.min(spec.max, Math.max(spec.min, values[name] ?? spec.def));
+    genome[name] = v;
+    const input = sliderFor.get(name);
+    if (input !== undefined) input.value = String(v);
+    readoutFor.get(name)?.replaceChildren(formatGene(name, v));
+  }
+}
+
+let armed = false;
 
 const TRAIL_CAPACITY = 96;
 const trail = new Float64Array(TRAIL_CAPACITY * 2);
@@ -94,8 +147,35 @@ canvas.addEventListener('pointerdown', (event: PointerEvent) => {
     selectAtWorld(wx, wy);
     return;
   }
+  if (armed) {
+    releaseEngineered(wx, wy);
+    return;
+  }
   for (let n = 0; n < 8; n++) world.placeFood(wx + world.rng.range(-14, 14), wy + world.rng.range(-14, 14));
 });
+
+engineerWild.addEventListener('click', () => setGenomeFrom(world.report().means));
+engineerArm.addEventListener('click', () => setArmed(!armed));
+
+function setArmed(value: boolean): void {
+  armed = value;
+  engineerArm.setAttribute('aria-pressed', String(value));
+  engineerArm.textContent = value ? 'click the arena to release' : 'arm placement (e)';
+}
+
+/** Drop the edited genome into the live population. One release per arming, so a runaway click
+ *  cannot bury the wild population by accident. Returns how many were placed. */
+function releaseEngineered(wx: number, wy: number, count = Number(engineerCount.value), genes = genome): number {
+  const n = Math.max(1, Math.min(50, Math.round(Number.isFinite(count) ? count : 1)));
+  let placed = 0;
+  for (let k = 0; k < n; k++) {
+    // jitter spreads them instead of stacking every release on one point; the world rng keeps it
+    // reproducible for a given seed
+    if (world.engineer(wx + world.rng.range(-16, 16), wy + world.rng.range(-16, 16), genes) >= 0) placed++;
+  }
+  setArmed(false);
+  return placed;
+}
 
 function setSpeed(value: number): void {
   speed = value;
@@ -156,6 +236,8 @@ window.addEventListener('keydown', (event: KeyboardEvent) => {
     setTurbo(!turbo);
   } else if (event.key === 'i') {
     setIsolate(!isolate);
+  } else if (event.key === 'e') {
+    setArmed(!armed);
   } else if (event.key >= '1' && event.key <= '8') {
     // one key walks the allowed speeds 1 -> 2 -> 4 -> 8 -> 1
     setSpeed(nextSpeed(speed));
@@ -260,6 +342,9 @@ function frame(now: number): void {
       // means move as selection acts, so they are the quickest visible sign evolution is happening
       `mean genome · r ${m.radius.toFixed(1)} · v ${m.maxSpeed.toFixed(0)} · sense ${m.senseRadius.toFixed(0)} · meta ${m.metabolism.toFixed(2)} · seek ${m.seekFood.toFixed(2)} · flee ${m.flee.toFixed(2)}`,
     ];
+    if (report.engineered > 0) {
+      lines.push(`engineered ${report.engineered} of ${report.organisms} · mean r ${report.engineeredMeanRadius.toFixed(1)}`);
+    }
     hud.textContent = lines.join('\n');
     inspector.textContent = inspectorText(selected);
   }
@@ -287,4 +372,9 @@ requestAnimationFrame(frame);
   // same code path a shift+click takes, so the headless check can select a known organism
   select: (index = 0) => selectAtWorld(world.x[index], world.y[index]),
   isolate: (value = true) => setIsolate(value),
+  // release with an exact genome at a known point, bypassing the sliders: how the headless check
+  // proves the tool reaches the world
+  engineer: (genes: Partial<Record<GeneName, number>> = {}, count = 1, x = params.worldWidth / 2, y = params.worldHeight / 2) =>
+    releaseEngineered(x, y, count, genes),
+  engineeredCount: () => world.report().engineered,
 };

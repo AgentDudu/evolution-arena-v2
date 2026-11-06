@@ -406,7 +406,8 @@ Each item is independently mergeable to `develop` and leaves the app running.
 | 7 | Save & share | autosave, named slots, seed+params+log replay, share link, CSV/JSON export | a share link reproduces the sender's `stateHash` at its tick count | M |
 | 8 | Hardening & polish | perf pass vs budgets, keyboard shortcuts, mobile/touch basics, README how-to-run, error boundary, `precommit-scan` hook | budgets in §10 met on a mid-range laptop; fresh clone runs with `pnpm i && pnpm dev` | M |
 
-Done so far: items 1-4, 4b and 6 are merged. Item 4 evidence — `test/predation.test.ts` holds the
+Done so far: items 1-4, 4b, 5 and 6 are merged. Item 5's remaining sub-deliverables (delete tool,
+live sim param editors, events) are not built; the item's done-when is met and its evidence is below. Item 4 evidence — `test/predation.test.ts` holds the
 rule (overlap + ratio + both size floors + one kill per hunter + energy cap) and shows two radius
 morphs separated by >= 4 units coexisting for over 5 sim-minutes; the HUD prints the class count.
 
@@ -421,6 +422,27 @@ run 240 s of turbo (59378 ticks, pop ~1400) with `--expose-gc` and saw collected
 no page exceptions; `node --expose-gc scripts/headless.ts 216000 arena-1` (a real sim hour)
 held collected heap at 8.1 -> 8.3 MB. Panels read typed-array views and normalize into reused
 buffers, so a 4 Hz graph refresh allocates nothing.
+
+Item 5 evidence (measured, `test/sandbox.test.ts` + `test/sandbox.long.test.ts`) — the tool: a trait
+editor (one slider per gene, gene defaults), **copy wild mean** which seeds the sliders from
+`report().means`, release count 1-50, arm by button or `e`, one release per arming, jitter +-16 world
+units by the seeded rng. `World.engineer(x, y, genes)` clamps every gene to its range and keeps the
+body inside the walls, and marks the slot `origin 1`; fission passes the mark on, so the whole lineage
+stays findable. That mark reaches `report().engineered` / `engineeredMeanRadius`, a metric-history
+column, the yellow series of the population panel, the HUD, and a #ffe36b ring in the aerial view.
+Competition, measured: wild-mean genome with only radius set to 15.5 on seed `release-mid` went 12
+founders -> 4 at +1200 ticks -> peak 19 at +3600 -> 6 at +12000, max generation 8, mean radius
+15.38-15.57 against a designed 15.5; a radius-5 design on `arena-1` held 12-17 descendants the whole
+window, generation 3, radius 4.99-5.07; the wild population was not displaced in either case (1001-
+1353). The negative control matters just as much: radius 10 with senseRadius 150 pays
+`0.0008 * 150^2` = 18 energy per tick where the population settled on ~1.7 (sense 46-55), and all 12
+founders were dead within 100 ticks and extinct for the rest of the window. The arena selects, it does
+not rescue - which is the reason the panel starts from the wild mean instead of the gene defaults
+(senseRadius 80 = 5 energy per tick is itself a lethal genome). In the browser the check drives the
+real DOM path (copy wild mean -> radius 15.5, hue 300 -> count 12 -> arm -> pointerdown at the arena
+centre): 12 placed, 12 alive after 900 ms, and the ring pass added 153 sampled pixels over the same
+canvas baseline. Two real bugs surfaced on the way: the arm button had no click listener (only `e`),
+and with isolate on, released organisms go through the dim pass and never reach the ring pass.
 
 Item 4b (measured, `scripts/foodweb.ts`) — item 4 only held for 5 sim-minutes. At a full sim hour the
 old default world was a giant monoculture: mean radius 15.4 against a ceiling of 16, dwarf class down

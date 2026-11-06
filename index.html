@@ -33,6 +33,11 @@
       #graphs .chart > div { margin-top: 2px; }
       #histogram { width: 100%; height: 84px; display: block; }
       #inspector { color: var(--fg); white-space: pre-wrap; margin: 10px 0 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+      #sandbox { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 8px; }
+      #sandbox .genes { display: grid; grid-template-columns: 5.5em 1fr 3.5em; gap: 1px 6px; align-items: center; margin-top: 4px; }
+      #sandbox .genes input[type='range'] { width: 100%; accent-color: #ffe36b; }
+      #sandbox .v { color: var(--fg); text-align: right; }
+      #sandbox .row { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
       b { color: var(--fg); }
       span.k { color: var(--dim); }
       button, input[type='text'] {
@@ -64,17 +69,26 @@
       </div>
 
       <div class="panel" id="hint">
-        click = drop food · shift+click = inspect organism · i = isolate its lineage · space = pause ·
-        n = step · 1/2/4/8 = speed · t = turbo
+        click = drop food · shift+click = inspect organism · e = arm release of an engineered organism ·
+        i = isolate its lineage · space = pause · n = step · 1/2/4/8 = speed · t = turbo
       </div>
     </div>
 
     <aside id="graphs" aria-label="Live population and trait graphs">
-      <div class="chart"><span class="k">population / food</span><div id="chart-pop"></div></div>
+      <div class="chart"><span class="k">population / food · yellow = engineered lineage</span><div id="chart-pop"></div></div>
       <div class="chart"><span class="k">total energy</span><div id="chart-energy"></div></div>
       <div class="chart"><span class="k">size classes now (radius bins)</span><canvas id="histogram"></canvas></div>
       <div class="chart"><span class="k">trait means · share of gene range</span><div id="chart-traits"></div></div>
       <div class="chart"><span class="k">species (size classes over 20)</span><div id="chart-species"></div></div>
+      <div id="sandbox">
+        <span class="k">engineer · genome of the organism to release</span>
+        <div class="genes" id="engineer-genes"></div>
+        <div class="row">
+          <label>count <input id="engineer-count" type="number" min="1" max="50" value="10" size="3" /></label>
+          <button id="engineer-wild" type="button">copy wild mean</button>
+          <button id="engineer-arm" aria-pressed="false">arm placement (e)</button>
+        </div>
+      </div>
       <div id="inspector"><span class="k">shift+click an organism to inspect it</span></div>
       <label><input id="isolate" type="checkbox" /> isolate its lineage (i)</label>
     </aside>

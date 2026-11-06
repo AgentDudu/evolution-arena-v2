@@ -27,6 +27,8 @@ describe('MetricsHistory', () => {
     species: [],
     speciesCount: 4,
     sizeBins: [],
+    engineered: 0,
+    engineeredMeanRadius: 0,
   });
 
   it('only samples every stride ticks', () => {

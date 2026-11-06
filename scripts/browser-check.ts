@@ -106,6 +106,73 @@ const expression = `(async () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i' }));
     const isolated = document.getElementById('isolate').checked;
 
+    // Sandbox release, driven through the same DOM path a person uses: copy the population's own
+    // genome, change one gene, arm, click the arena. Gene defaults are a lethal genome in this food
+    // web (senseRadius 80 costs 5 energy per tick against the ~1.7 the population settled on), which
+    // is exactly why the button copies the wild mean instead of starting from the defaults.
+    const sandbox = { placed: 0, surviving: 0, armedLabel: '', ringBefore: 0, ringAfter: 0, error: null };
+    const ringPixels = (probe) => {
+      const stage = document.getElementById('arena');
+      const data = stage.getContext('2d').getImageData(0, 0, stage.width, stage.height).data;
+      let hits = 0;
+      let ink = 0;
+      let maxR = 0;
+      // ENGINEERED_RING #ffe36b is drawn at lineWidth 1, so most of its pixels are part-coverage
+      // against the dark arena. What separates it from the yellow food class #c8e66a is the red/green
+      // order: the ring is red-forward (255,227), the food is green-forward (200,230), and blending
+      // towards the background keeps that order at any coverage. The before/after delta then cancels
+      // the wild organisms whose hue happens to sit near yellow.
+      for (let i = 0; i < data.length; i += 16) {
+        if (data[i + 3] !== 0) ink++;
+        if (data[i] > maxR) maxR = data[i];
+        if (data[i] > data[i + 1] + 4 && data[i + 1] > data[i + 2] + 30 && data[i] > 90) hits++;
+      }
+      probe.ink = ink;
+      probe.maxR = maxR;
+      probe.width = stage.width;
+      probe.height = stage.height;
+      return hits;
+    };
+    try {
+      // the inspector phase above turned isolate on, and dimmed organisms skip the ring pass
+      window.arena.isolate(false);
+      document.getElementById('engineer-wild').click();
+      for (const pair of [['engineer-radius', 15.5], ['engineer-hue', 300]]) {
+        const slider = document.getElementById(pair[0]);
+        slider.value = String(pair[1]);
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      document.getElementById('engineer-count').value = '12';
+      document.getElementById('engineer-arm').click();
+      sandbox.armedLabel = document.getElementById('engineer-arm').textContent;
+      const stage = document.getElementById('arena');
+      const box = stage.getBoundingClientRect();
+      const beforeProbe = {};
+      const afterProbe = {};
+      sandbox.ringBefore = ringPixels(beforeProbe);
+      stage.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          clientX: box.left + box.width / 2,
+          clientY: box.top + box.height / 2,
+          bubbles: true,
+        }),
+      );
+      sandbox.placed = window.arena.engineeredCount();
+      await new Promise((r) => setTimeout(r, 900));
+      sandbox.surviving = window.arena.engineeredCount();
+      sandbox.ringAfter = ringPixels(afterProbe);
+      Object.assign(sandbox, {
+        beforeInk: beforeProbe.ink,
+        afterInk: afterProbe.ink,
+        beforeMaxR: beforeProbe.maxR,
+        afterMaxR: afterProbe.maxR,
+        bufW: afterProbe.width,
+        bufH: afterProbe.height,
+      });
+    } catch (sandboxFailure) {
+      sandbox.error = String(sandboxFailure);
+    }
+
     const heapBefore = window.arena.memory();
     const samplesBefore = window.arena.metrics().length;
 
@@ -177,6 +244,7 @@ const expression = `(async () => {
         heapMB: { before: mb(heapBefore), after: mb(heapAfter) },
       },
       soak,
+      sandbox,
       inspector: { text: inspectorText, isolateToggled: isolated },
       hud: document.getElementById('hud').textContent,
     };
@@ -250,7 +318,8 @@ await call('Runtime.enable');
 // the probe has to run after the CDP call helpers exist, otherwise nextId is still in its TDZ
 if (!(await waitForApp())) problems.push('the app never loaded on the attached target');
 
-const evaluated = await call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });console.log(JSON.stringify(evaluated, null, 2));
+const evaluated = await call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+console.log(JSON.stringify(evaluated, null, 2));
 if (problems.length > 0) console.log('page exceptions:', problems);
 
 // the payload carries an `error` only when something actually threw; a null soak.error is normal,
@@ -262,6 +331,7 @@ type Payload = {
   bigFoodInkPixels?: number;
   graph?: { panels?: number; uPlotCanvases?: number; histogramInkPixels?: number };
   inspector?: { text?: string; isolateToggled?: boolean };
+  sandbox?: { error?: string | null; placed?: number; surviving?: number; armedLabel?: string; ringBefore?: number; ringAfter?: number };
 };
 const payload = ((evaluated.result as { result?: { value?: Payload } } | undefined)?.result?.value ?? {}) as Payload;
 
@@ -274,6 +344,11 @@ if (payload.error === undefined) {
   if ((payload.graph?.uPlotCanvases ?? 0) < 4) gates.push('uPlot canvases missing');
   if (!payload.graph?.histogramInkPixels) gates.push('the size histogram painted nothing');
   if (payload.inspector?.isolateToggled !== true) gates.push('isolate did not toggle');
+  if (payload.sandbox?.error) gates.push(`sandbox release threw ${payload.sandbox.error}`);
+  if ((payload.sandbox?.placed ?? 0) < 12) gates.push('the release placed fewer than 12 organisms');
+  if ((payload.sandbox?.surviving ?? 0) < 1) gates.push('the released lineage died on the spot');
+  if ((payload.sandbox?.ringAfter ?? 0) - (payload.sandbox?.ringBefore ?? 0) < 40) gates.push('no engineered ring pixels appeared');
+  if (!payload.sandbox?.armedLabel?.includes('release')) gates.push('arming did not change the button label');
   if (!payload.inspector?.text?.includes('lineage')) gates.push('inspector produced no genome');
 }
 if (gates.length > 0) console.log('gates failed:', gates);

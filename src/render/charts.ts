@@ -22,7 +22,7 @@ interface PanelSpec {
 }
 
 const SPECS: PanelSpec[] = [
-  { id: 'chart-pop', title: 'population / food', columns: ['pop', 'food'], colors: ['#7fd3ff', '#5fd08a'] },
+  { id: 'chart-pop', title: 'population / food', columns: ['pop', 'food', 'engineered'], colors: ['#7fd3ff', '#5fd08a', '#ffe36b'] },
   { id: 'chart-energy', title: 'total energy', columns: ['energy'], colors: ['#f4c26b'] },
   {
     id: 'chart-traits',

@@ -10,6 +10,7 @@ export const METRIC_COLUMNS = [
   'energy',
   'generations',
   'species',
+  'engineered',
   'radius',
   'senseRadius',
   'maxSpeed',
@@ -56,6 +57,7 @@ export class MetricsHistory {
     this.series.energy[i] = report.energy;
     this.series.generations[i] = report.meanGeneration;
     this.series.species[i] = report.speciesCount;
+    this.series.engineered[i] = report.engineered;
     this.series.radius[i] = report.means.radius;
     this.series.senseRadius[i] = report.means.senseRadius;
     this.series.maxSpeed[i] = report.means.maxSpeed;
