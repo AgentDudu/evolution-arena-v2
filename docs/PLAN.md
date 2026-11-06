@@ -1,7 +1,8 @@
 # Evolution Arena — Implementation Plan
 
-Status: items 1-4 of §14 are merged on `develop` (deterministic core, visible arena, selection
-over 10 sim-minutes, predation + size morphs). Items 5-8 are not started.
+Status: items 1-4 and 6 of §14 are merged on `develop` (deterministic core, visible arena,
+selection over 10 sim-minutes, predation + size morphs, live graphs + organism inspector).
+Items 5, 7 and 8 are not started.
 Branch: `docs/evolution-arena-plan` (from `develop`).
 Date: 2026-11-06.
 
@@ -320,8 +321,8 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
   worker→host progress channel has a fixed 60 s timeout with no config knob (vitest#11082, #8164):
   one synchronous 60 s+ loop makes the whole run exit 1 with `Timeout calling "onTaskUpdate"`
   even though every test passed.
-- Slow files are named `*.long.test.ts`. `pnpm test` runs everything (~150 s, the proof);
-  `pnpm test:quick` excludes that glob (46 tests, ~4 s) and is the edit loop. The quick lane keeps
+- Slow files are named `*.long.test.ts`. `pnpm test` runs everything (69 tests, ~160 s, the proof);
+  `pnpm test:quick` excludes that glob (53 tests, ~4 s) and is the edit loop. The quick lane keeps
   a 500-tick determinism check (`determinism.test.ts`) so the core invariant is never skipped.
 - `scripts/browser-check.ts` (`pnpm browser-check`, needs `vite preview`) — drives headless Edge over
   CDP: asserts no page exception, reports real-time ticks/s, turbo ticks/s, population/food/generation,
@@ -333,7 +334,10 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
   for over 5 sim-minutes.
 - `mutation.test.ts` — genes stay in range, same seed gives the same child genome, unrelated seed
   gives a different one.
-- `metrics.test.ts` — ring-buffer downsampling keeps first/last and monotonic time.
+- `metrics.test.ts` — ring-buffer downsampling keeps first/last and monotonic time, capacity is
+  never exceeded by a 216000-tick (one sim-hour) sample stream while the stride grows 15 -> 240,
+  and `uPlotData` hands out views not copies. Also covers size bins covering every organism and
+  `slotOfLineage` finding an organism again after the array compacts.
 - `save.test.ts` — replay from seed + edit log reproduces the same `stateHash`.
 - `bench.test.ts` — throughput numbers printed.
 - Manual QA checklist in the docs: pause/step/speed, all sandbox tools, all charts, resize +
@@ -395,9 +399,21 @@ Each item is independently mergeable to `develop` and leaves the app running.
 | 7 | Save & share | autosave, named slots, seed+params+log replay, share link, CSV/JSON export | a share link reproduces the sender's `stateHash` at its tick count | M |
 | 8 | Hardening & polish | perf pass vs budgets, keyboard shortcuts, mobile/touch basics, README how-to-run, error boundary, `precommit-scan` hook | budgets in §10 met on a mid-range laptop; fresh clone runs with `pnpm i && pnpm dev` | M |
 
-Done so far: items 1-4 are merged. Item 4 evidence — `test/predation.test.ts` holds the rule
-(overlap + ratio + both size floors + one kill per hunter + energy cap) and shows two radius
+Done so far: items 1-4 and 6 are merged. Item 4 evidence — `test/predation.test.ts` holds the
+rule (overlap + ratio + both size floors + one kill per hunter + energy cap) and shows two radius
 morphs separated by >= 4 units coexisting for over 5 sim-minutes; the HUD prints the class count.
+
+Item 6 evidence — four live uPlot panels (population/food, total energy, trait means as a share
+of each gene range, species count), a radius-bin histogram from `report().sizeBins`, and an
+inspector that tracks a **lineage id** (not a slot, which moves when the array compacts) with
+isolate-dim and a position trail instead of a camera follow, since the view is aerial.
+Bounded memory is proven on both sides: `test/metrics.test.ts` shows a one-sim-hour sample
+stream never exceeds the 1024-sample capacity while the stride grows 15 -> 240; the browser check
+run 240 s of turbo (59378 ticks, pop ~1400) with `--expose-gc` and saw collected heap sawtooth
+8-35 MB with no upward trend, ending at 10 MB, 4 uPlot canvases plus 13k histogram ink pixels,
+no page exceptions; `node --expose-gc scripts/headless.ts 216000 arena-1` (a real sim hour)
+held collected heap at 8.1 -> 8.3 MB. Panels read typed-array views and normalize into reused
+buffers, so a 4 Hz graph refresh allocates nothing.
 
 Order is dependency order, not a promise about commit content. Items 1-4 make evolution happen;
 5-7 make it a sandbox you can manipulate and share; 8 makes it pleasant and fast.

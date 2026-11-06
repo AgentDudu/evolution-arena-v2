@@ -1,6 +1,9 @@
-// Headless arena run: prints the final report, the state hash, and throughput.
+// Headless arena run: prints the final report, the state hash, and throughput. With
+// --expose-gc it also prints the graph buffers and collected heap at checkpoints, which is how a
+// full sim-hour (216000 ticks) is checked for memory growth without a browser.
 // Usage: node scripts/headless.ts [ticks] [seed] [json param overrides]
 import { DEFAULT_PARAMS, type SimParams } from '../src/core/config.ts';
+import { MetricsHistory } from '../src/sim/history.ts';
 import { World } from '../src/sim/world.ts';
 
 const ticks = Number(process.argv[2] ?? 5000);
@@ -18,8 +21,21 @@ const overrides = parseOverrides(process.argv[4]);
 if (!Number.isInteger(ticks) || ticks < 0) throw new Error(`bad tick count ${process.argv[2]}`);
 
 const world = new World({ ...DEFAULT_PARAMS, seed, ...overrides });
+const metrics = new MetricsHistory();
+const collect = (globalThis as { gc?: () => void }).gc;
+const checkpoint = Math.max(1, Math.round(ticks / 8));
 const started = performance.now();
-for (let i = 0; i < ticks; i++) world.step();
+for (let i = 0; i < ticks; i++) {
+  world.step();
+  if (i % 15 === 0) metrics.sample(world.report());
+  if ((i + 1) % checkpoint === 0) {
+    collect?.();
+    console.log(
+      `  tick=${world.tick} pop=${world.alive} samples=${metrics.length}/${metrics.capacity} ` +
+        `stride=${metrics.stride} heapMB=${(process.memoryUsage().heapUsed / 1048576).toFixed(1)}`,
+    );
+  }
+}
 const ms = performance.now() - started;
 
 const r = world.report();

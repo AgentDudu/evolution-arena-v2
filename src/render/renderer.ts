@@ -8,14 +8,21 @@ import { ENERGY_BANDS, HUE_BUCKETS, PALETTE, paletteKey } from './palette.ts';
 export interface DrawOptions {
   alpha: number;
   selected: number;
+  /** Keep this lineage at full colour and dim the rest; -1 leaves everything normal. */
+  isolateLineage: number;
+  /** Recent positions of the tracked organism as x,y pairs (aerial view has no camera follow). */
+  trail: Float64Array | null;
+  trailLength: number;
 }
 
 const BACKGROUND = '#0b0f14';
 const ARENA_EDGE = '#2a3644';
 const FOOD_COLOR = '#5fd08a';
+const DIM_ORGANISM = '#1d2530';
 
 export class Renderer {
   private readonly buckets: number[][] = Array.from({ length: HUE_BUCKETS * ENERGY_BANDS }, () => []);
+  private readonly dim: number[] = [];
   private readonly canvas: HTMLCanvasElement;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -51,9 +58,28 @@ export class Renderer {
     }
 
     for (const bucket of this.buckets) bucket.length = 0;
+    this.dim.length = 0;
+    const isolate = opts.isolateLineage >= 0;
     for (let i = 0; i < world.alive; i++) {
+      if (isolate && world.lineage[i] !== opts.isolateLineage) {
+        this.dim.push(i);
+        continue;
+      }
       const fraction = world.energy[i] / (world.gene.reproThreshold[i] * 2);
       this.buckets[paletteKey(world.gene.hue[i], fraction)]?.push(i);
+    }
+
+    if (this.dim.length > 0) {
+      ctx.fillStyle = DIM_ORGANISM;
+      ctx.beginPath();
+      for (const i of this.dim) {
+        const x = toPixelX(camera, world.prevX[i] + (world.x[i] - world.prevX[i]) * opts.alpha);
+        const y = toPixelY(camera, world.prevY[i] + (world.y[i] - world.prevY[i]) * opts.alpha);
+        const r = Math.max(0.8, world.gene.radius[i] * camera.scale);
+        ctx.moveTo(x + r, y);
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+      }
+      ctx.fill();
     }
 
     for (let key = 0; key < this.buckets.length; key++) {
@@ -69,6 +95,19 @@ export class Renderer {
         ctx.arc(x, y, r, 0, Math.PI * 2);
       }
       ctx.fill();
+    }
+
+    if (opts.trail !== null && opts.trailLength > 1) {
+      ctx.strokeStyle = 'rgba(232, 238, 246, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i < opts.trailLength; i++) {
+        const x = toPixelX(camera, opts.trail[i * 2]);
+        const y = toPixelY(camera, opts.trail[i * 2 + 1]);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
     }
 
     if (opts.selected >= 0 && opts.selected < world.alive) {

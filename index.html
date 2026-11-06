@@ -15,14 +15,24 @@
       }
       * { box-sizing: border-box; }
       html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
-      #arena { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+      body { display: flex; }
+      #stage { position: relative; flex: 1 1 auto; min-width: 0; }
+      #arena { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
       .panel {
-        position: fixed; left: 12px; background: color-mix(in srgb, var(--panel) 85%, transparent);
+        position: absolute; background: color-mix(in srgb, var(--panel) 85%, transparent);
         border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; backdrop-filter: blur(4px);
       }
-      #hud { top: 12px; min-width: 260px; }
-      #controls { bottom: 12px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; max-width: calc(100vw - 24px); }
-      #hint { bottom: 12px; right: 12px; left: auto; color: var(--dim); max-width: 320px; }
+      #hud { top: 12px; left: 12px; min-width: 260px; white-space: pre; }
+      #controls { bottom: 12px; left: 12px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; max-width: calc(100% - 24px); }
+      #hint { bottom: 12px; right: 12px; color: var(--dim); max-width: 340px; }
+      #graphs {
+        flex: 0 0 322px; height: 100%; overflow-y: auto; padding: 8px 10px;
+        border-left: 1px solid var(--line); background: var(--panel); color: var(--dim);
+      }
+      #graphs .chart { margin-bottom: 10px; }
+      #graphs .chart > div { margin-top: 2px; }
+      #histogram { width: 100%; height: 84px; display: block; }
+      #inspector { color: var(--fg); white-space: pre-wrap; margin: 10px 0 6px; border-top: 1px solid var(--line); padding-top: 8px; }
       b { color: var(--fg); }
       span.k { color: var(--dim); }
       button, input[type='text'] {
@@ -31,29 +41,43 @@
       }
       button[aria-pressed='true'] { background: #2f6f4f; border-color: #3f8f68; }
       label { color: var(--dim); display: inline-flex; gap: 4px; align-items: center; }
+      @media (max-width: 900px) { #graphs { display: none; } }
     </style>
   </head>
   <body>
-    <canvas id="arena" aria-label="Aerial view of the whole arena"></canvas>
+    <div id="stage">
+      <canvas id="arena" aria-label="Aerial view of the whole arena"></canvas>
 
-    <div class="panel" id="hud">loading…</div>
+      <div class="panel" id="hud">loading…</div>
 
-    <div class="panel" id="controls">
-      <button id="playpause" aria-pressed="true">pause</button>
-      <button id="step">step</button>
-      <span class="k">speed</span>
-      <button data-speed="1" aria-pressed="true">1x</button>
-      <button data-speed="2" aria-pressed="false">2x</button>
-      <button data-speed="4" aria-pressed="false">4x</button>
-      <button data-speed="8" aria-pressed="false">8x</button>
-      <button id="turbo" aria-pressed="false">turbo</button>
-      <label>seed <input id="seed" type="text" size="10" /></label>
-      <button id="reset">reset</button>
+      <div class="panel" id="controls">
+        <button id="playpause" aria-pressed="true">pause</button>
+        <button id="step">step</button>
+        <span class="k">speed</span>
+        <button data-speed="1" aria-pressed="true">1x</button>
+        <button data-speed="2" aria-pressed="false">2x</button>
+        <button data-speed="4" aria-pressed="false">4x</button>
+        <button data-speed="8" aria-pressed="false">8x</button>
+        <button id="turbo" aria-pressed="false">turbo</button>
+        <label>seed <input id="seed" type="text" size="10" /></label>
+        <button id="reset">reset</button>
+      </div>
+
+      <div class="panel" id="hint">
+        click = drop food · shift+click = inspect organism · i = isolate its lineage · space = pause ·
+        n = step · 1/2/4/8 = speed · t = turbo
+      </div>
     </div>
 
-    <div class="panel" id="hint">
-      click = drop food · shift+click = inspect organism · space = pause · n = step · s = cycle speed · t = turbo
-    </div>
+    <aside id="graphs" aria-label="Live population and trait graphs">
+      <div class="chart"><span class="k">population / food</span><div id="chart-pop"></div></div>
+      <div class="chart"><span class="k">total energy</span><div id="chart-energy"></div></div>
+      <div class="chart"><span class="k">size classes now (radius bins)</span><canvas id="histogram"></canvas></div>
+      <div class="chart"><span class="k">trait means · share of gene range</span><div id="chart-traits"></div></div>
+      <div class="chart"><span class="k">species (size classes over 20)</span><div id="chart-species"></div></div>
+      <div id="inspector"><span class="k">shift+click an organism to inspect it</span></div>
+      <label><input id="isolate" type="checkbox" /> isolate its lineage (i)</label>
+    </aside>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

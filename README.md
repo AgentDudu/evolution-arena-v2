@@ -6,26 +6,33 @@ the whole arena - no follow camera.
 
 Planning: [docs/PLAN.md](docs/PLAN.md)
 
-Status: items 1-4 of the plan are in. Deterministic core (seeded PRNG, spatial hash, fixed-tick
+Status: items 1-4 and 6 of the plan are in. Deterministic core (seeded PRNG, spatial hash, fixed-tick
 pipeline), aerial Canvas 2D renderer with play/pause/step/speed/turbo, selection that measurably
-moves the mean genome over 10 sim-minutes, and size-structured predation that keeps two radius morphs
-(giants ~15.6, dwarfs ~5-7) side by side for more than 5 sim-minutes. No graphs, param editors, or
-save/share yet.
+moves the mean genome over 10 sim-minutes, size-structured predation that keeps two radius morphs
+(giants ~15.6, dwarfs ~5-7) side by side for more than 5 sim-minutes, and a graphs column (population,
+energy, trait means, species, size histogram) with a per-organism inspector. Param editors and
+save/share are not built yet.
 
 ```sh
 pnpm install
 pnpm dev                          # http://localhost:5173 — whole world fitted to the window
-pnpm test                         # everything: 58 tests, ~150 s (long arena runs dominate)
-pnpm test:quick                   # same suite minus *.long.test.ts: 46 tests, ~4 s — the edit loop
+pnpm test                         # everything: 69 tests, ~160 s (long arena runs dominate)
+pnpm test:quick                   # same suite minus *.long.test.ts: 53 tests, ~4 s — the edit loop
 pnpm typecheck
 node scripts/headless.ts 36000    # [ticks] [seed] [json params] -> report + species + state hash
+node --expose-gc scripts/headless.ts 216000 arena-1   # a sim-hour soak: buffers + collected heap
 pnpm build && npx vite preview --port 4321 &
-pnpm browser-check                # headless Edge over CDP: ticks/s, turbo, painted-pixel check
+pnpm browser-check http://localhost:4321/?seed=check 4 240   # headless Edge over CDP: ticks/s, painted
+                                  # pixels, 4 graph panels, then 240 s turbo soak with heap per 10 s
 ```
 
-Controls: click = drop food, shift+click = inspect an organism (shows its sense radius), space =
-pause, n = one tick, s = cycle speed 1x → 2x → 4x → 8x, t = turbo (ticks until the frame budget is
-spent, still draws). The HUD prints the live species-class count and the population mean genome.
+Controls: click = drop food, shift+click = inspect an organism (genome readout + sense radius),
+i = isolate its lineage (everything else dims, its trail is drawn), space = pause, n = one tick,
+s = cycle speed 1x → 2x → 4x → 8x, t = turbo (ticks until the frame budget is spent, still draws).
+The HUD prints the live species-class count and the population mean genome; the right column graphs
+population, food, total energy, trait means as a share of each gene's range, species count, and the
+radius histogram. The inspector follows a **lineage**, not an array slot, so the tracked organism
+survives the compaction that happens whenever one dies.
 
 ## Secret gate
 
