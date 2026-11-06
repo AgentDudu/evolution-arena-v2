@@ -6,16 +6,17 @@ the whole arena - no follow camera.
 
 Planning: [docs/PLAN.md](docs/PLAN.md)
 
-Status: the arena is visible. Deterministic simulation core (seeded PRNG, spatial hash, fixed-step
-tick pipeline) plus an aerial Canvas 2D renderer with play/pause/step/speed/turbo and a live HUD.
-No graphs or sandbox editors yet.
+Status: the arena is visible and evolving. Deterministic core (seeded PRNG, spatial hash,
+fixed-tick pipeline), aerial Canvas 2D renderer with play/pause/step/speed/turbo, and selection
+that measurably moves the mean genome over 10 sim-minutes. No graphs, param editors, or save/share
+yet.
 
 ```sh
 pnpm install
 pnpm dev                          # http://localhost:5173 — whole world fitted to the window
-pnpm test                         # 42 tests, ~40 s
+pnpm test                         # 47 tests, ~100 s (the long-run evolution tests dominate)
 pnpm typecheck
-node scripts/headless.ts 5000     # seed, ticks -> report + state hash + throughput
+node scripts/headless.ts 36000    # seed, ticks -> report + state hash + throughput
 pnpm build && npx vite preview --port 4321 &
 pnpm browser-check                # headless Edge over CDP: ticks/s, turbo, painted-pixel check
 ```

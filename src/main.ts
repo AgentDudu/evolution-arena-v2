@@ -5,7 +5,7 @@
 import { DEFAULT_PARAMS, type SimParams } from './core/config.ts';
 import { cssToDevice, fitCamera, toWorldX, toWorldY, type Camera } from './render/camera.ts';
 import { Renderer } from './render/renderer.ts';
-import { advance, createClock } from './sim/loop.ts';
+import { advance, createClock, runTimeBoxed } from './sim/loop.ts';
 import { World } from './sim/world.ts';
 
 const canvas = document.getElementById('arena') as HTMLCanvasElement;
@@ -116,6 +116,8 @@ window.addEventListener('keydown', (event: KeyboardEvent) => {
 });
 
 let lastFrame = performance.now();
+const TURBO_TICK_MS = 12;
+const MAX_TICKS_PER_FRAME = 16;
 let lastHud = lastFrame;
 let frames = 0;
 let windowTicks = 0;
@@ -126,21 +128,27 @@ function frame(now: number): void {
   lastFrame = now;
 
   const started = performance.now();
-  // turbo is capped by measured throughput (~570 ticks/s), so a frame stays responsive while
-  // still fast-forwarding; raise the cap after the perf pass in PLAN §10.
-  const maxTicks = turbo ? 240 : 16;
-  // Turbo ignores wall-clock: the frame budget decides how many ticks run, not elapsed time.
-  const elapsedForSim = turbo ? maxTicks * world.params.dt : elapsed;
   const tickBefore = world.tick;
-  const alpha = paused ? 1 : advance(world, clock, elapsedForSim, speed, maxTicks);
+  let alpha = 1;
+  if (!paused) {
+    if (turbo) {
+      // Turbo spends ~12 ms of each frame on ticks and draws the rest of the frame, so the view
+      // keeps moving instead of freezing at 2-3 fps. Cap 4000 ticks: a frame still cannot stall
+      // forever on a huge population.
+      runTimeBoxed(world, 4000, TURBO_TICK_MS, () => performance.now());
+    } else {
+      alpha = advance(world, clock, elapsed, speed, MAX_TICKS_PER_FRAME);
+    }
+  }
   windowTicks += world.tick - tickBefore;
   windowSimMs += performance.now() - started;
 
-  if (!turbo) renderer.draw(world, camera, { alpha, selected });
+  renderer.draw(world, camera, { alpha, selected });
   frames++;
 
   if (now - lastHud > 250) {
     const report = world.report();
+    const m = report.means;
     const fps = Math.round((frames * 1000) / (now - lastHud));
     const msPerTick = windowTicks > 0 ? windowSimMs / windowTicks : 0;
     frames = 0;
@@ -150,6 +158,8 @@ function frame(now: number): void {
     const lines = [
       `tick ${report.tick} · pop ${report.organisms} · food ${report.food} · gen ${report.meanGeneration.toFixed(2)}`,
       `${fps} fps · ${turbo ? 'turbo' : `${speed}x`} · ${msPerTick.toFixed(2)} ms/tick`,
+      // means move as selection acts, so they are the quickest visible sign evolution is happening
+      `mean genome · r ${m.radius.toFixed(1)} · v ${m.maxSpeed.toFixed(0)} · sense ${m.senseRadius.toFixed(0)} · meta ${m.metabolism.toFixed(2)} · seek ${m.seekFood.toFixed(2)} · flee ${m.flee.toFixed(2)}`,
     ];
     if (selected >= 0 && selected < world.alive) {
       lines.push(

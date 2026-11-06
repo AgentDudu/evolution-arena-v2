@@ -2,12 +2,33 @@ import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_PARAMS } from '../src/core/config.ts';
 import { World } from '../src/sim/world.ts';
-import { advance, createClock } from '../src/sim/loop.ts';
+import { advance, createClock, runTimeBoxed } from '../src/sim/loop.ts';
 import { hueBucket, HUE_BUCKETS, PALETTE, paletteKey } from '../src/render/palette.ts';
 
 const newWorld = (): World => new World({ ...DEFAULT_PARAMS, seed: 'loop' });
 
 describe('fixed-step loop', () => {
+  it('turbo time-box stops at the millisecond budget, always runs a tick, and honours the cap', () => {
+    const world = newWorld();
+    let calls = 0;
+    const now = (): number => [0, 5, 9, 14, 20][Math.min(calls++, 4)];
+    expect(runTimeBoxed(world, 100, 10, now)).toBe(3);
+    expect(world.tick).toBe(3);
+
+    const slow = newWorld();
+    expect(runTimeBoxed(slow, 100, 0, () => 0)).toBe(1); // a machine over budget still advances
+
+    const capped = newWorld();
+    expect(runTimeBoxed(capped, 2, 1000, () => 0)).toBe(2);
+  });
+
+  it('advances exactly one tick when the budget is already spent', () => {
+    // A bare `performance.now` reference loses its receiver in the browser (illegal invocation),
+    // so the app passes an arrow; the sim layer takes the clock instead of reading it itself.
+    const world = newWorld();
+    expect(runTimeBoxed(world, 100, 0, () => performance.now())).toBe(1);
+  });
+
   it('runs exactly the ticks that elapsed buys, at dt granularity', () => {
     const world = newWorld();
     const clock = createClock();

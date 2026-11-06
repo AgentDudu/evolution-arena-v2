@@ -9,6 +9,20 @@ export interface Clock {
 
 export const createClock = (): Clock => ({ accumulator: 0 });
 
+/** Turbo: tick until the caller's millisecond budget is spent, then draw. Wall-clock elapsed
+ *  time is ignored, so throughput adapts to the machine and the population instead of the UI
+ *  freezing on a fixed tick count. At least one tick always runs. The clock is injected because
+ *  the sim layer must stay free of wall-clock reads (see test/invariants.test.ts). */
+export function runTimeBoxed(world: World, maxTicks: number, frameMs: number, now: () => number): number {
+  const until = now() + Math.max(0, frameMs);
+  let ticks = 0;
+  do {
+    world.step();
+    ticks++;
+  } while (ticks < maxTicks && now() < until);
+  return ticks;
+}
+
 /** Run as many whole ticks as `elapsedSeconds * speed` buys, capped by maxTicksPerFrame.
  *  Returns the fraction of a tick left over, for render interpolation. */
 export function advance(world: World, clock: Clock, elapsedSeconds: number, speed: number, maxTicksPerFrame: number): number {
