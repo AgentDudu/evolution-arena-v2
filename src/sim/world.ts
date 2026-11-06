@@ -49,6 +49,9 @@ export class World {
 
   readonly x: Float64Array;
   readonly y: Float64Array;
+  /** Position at the start of the current tick, for render interpolation. */
+  readonly prevX: Float64Array;
+  readonly prevY: Float64Array;
   readonly vx: Float64Array;
   readonly vy: Float64Array;
   readonly ax: Float64Array;
@@ -85,6 +88,8 @@ export class World {
 
     this.x = new Float64Array(this.cap);
     this.y = new Float64Array(this.cap);
+    this.prevX = new Float64Array(this.cap);
+    this.prevY = new Float64Array(this.cap);
     this.vx = new Float64Array(this.cap);
     this.vy = new Float64Array(this.cap);
     this.ax = new Float64Array(this.cap);
@@ -124,6 +129,8 @@ export class World {
     const i = this.alive++;
     for (const k of GENE_KEYS) this.gene[k][i] = randomGene(this.rng, k);
     this.placeOrganism(i);
+    this.prevX[i] = this.x[i];
+    this.prevY[i] = this.y[i];
     this.energy[i] = this.gene.reproThreshold[i] * 0.6;
     this.age[i] = 0;
     this.gen[i] = 0;
@@ -180,6 +187,8 @@ export class World {
 
   private moveOrganism(from: number, to: number): void {
     this.x[to] = this.x[from];
+    this.prevX[to] = this.prevX[from];
+    this.prevY[to] = this.prevY[from];
     this.y[to] = this.y[from];
     this.vx[to] = this.vx[from];
     this.vy[to] = this.vy[from];
@@ -224,6 +233,8 @@ export class World {
   /** One tick. Order is fixed and load-bearing: think reads tick-start state, deaths are
    *  applied before children are appended, and children never act until the next tick. */
   step(): void {
+    this.prevX.set(this.x.subarray(0, this.alive));
+    this.prevY.set(this.y.subarray(0, this.alive));
     this.spawnFoodStep();
     this.rebuildGrids();
     this.think();
@@ -388,6 +399,8 @@ export class World {
       const sep = this.gene.radius[i] + this.gene.radius[child];
       this.x[child] = clamp(this.x[i] + Math.cos(a) * sep, 0, p.worldWidth);
       this.y[child] = clamp(this.y[i] + Math.sin(a) * sep, 0, p.worldHeight);
+      this.prevX[child] = this.x[child];
+      this.prevY[child] = this.y[child];
     }
   }
 

@@ -6,16 +6,22 @@ the whole arena - no follow camera.
 
 Planning: [docs/PLAN.md](docs/PLAN.md)
 
-Status: deterministic simulation core exists (seeded PRNG, spatial hash, fixed-step tick
-pipeline, headless runner, 29 tests). No renderer or UI yet.
+Status: the arena is visible. Deterministic simulation core (seeded PRNG, spatial hash, fixed-step
+tick pipeline) plus an aerial Canvas 2D renderer with play/pause/step/speed/turbo and a live HUD.
+No graphs or sandbox editors yet.
 
 ```sh
 pnpm install
-pnpm dev                          # browser shell (no canvas yet)
-pnpm test                         # 29 tests, ~40 s
+pnpm dev                          # http://localhost:5173 — whole world fitted to the window
+pnpm test                         # 42 tests, ~40 s
 pnpm typecheck
 node scripts/headless.ts 5000     # seed, ticks -> report + state hash + throughput
+pnpm build && npx vite preview --port 4321 &
+pnpm browser-check                # headless Edge over CDP: ticks/s, turbo, painted-pixel check
 ```
+
+Controls: click = drop food, shift+click = inspect an organism (shows its sense radius), space =
+pause, n = one tick, 1/2/4/8 = speed, t = turbo (no rendering).
 
 ## Secret gate
 
