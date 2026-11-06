@@ -1,8 +1,11 @@
-// Browser entry: world + fixed-step loop + aerial renderer + the few controls needed to watch
-// evolution happen. Sandbox depth (trait editor, events, edit log) comes later; this is the
-// visible-arena work item.
+// Browser entry: world + fixed-step loop + aerial renderer + graphs + organism inspector + the
+// controls needed to watch evolution happen. Sandbox depth (trait editor, events, edit log) is the
+// next work item.
 
-import { DEFAULT_PARAMS, nextSpeed, type SimParams } from './core/config.ts';
+import { Charts } from './render/charts.ts';
+import { MetricsHistory } from './sim/history.ts';
+
+import { DEFAULT_PARAMS, GENES, GENE_NAMES, nextSpeed, type SimParams } from './core/config.ts';
 import { cssToDevice, fitCamera, toWorldX, toWorldY, type Camera } from './render/camera.ts';
 import { Renderer } from './render/renderer.ts';
 import { advance, createClock, runTimeBoxed } from './sim/loop.ts';
@@ -10,6 +13,9 @@ import { World } from './sim/world.ts';
 
 const canvas = document.getElementById('arena') as HTMLCanvasElement;
 const hud = document.getElementById('hud') as HTMLElement;
+const inspector = document.getElementById('inspector') as HTMLElement;
+const isolateBox = document.getElementById('isolate') as HTMLInputElement;
+const histogram = document.getElementById('histogram') as HTMLCanvasElement | null;
 const seedInput = document.getElementById('seed') as HTMLInputElement;
 const playPause = document.getElementById('playpause') as HTMLButtonElement;
 const stepButton = document.getElementById('step') as HTMLButtonElement;
@@ -29,7 +35,26 @@ let dpr = 1;
 let speed = 1;
 let paused = false;
 let turbo = false;
-let selected = -1;
+let isolate = false;
+// Slots move when the population array compacts, so the tracked organism is a lineage id and its
+// slot is looked up again each frame.
+let selectedLineage = -1;
+
+const TRAIL_CAPACITY = 96;
+const trail = new Float64Array(TRAIL_CAPACITY * 2);
+let trailLength = 0;
+let trailSlot = -1;
+
+const metrics = new MetricsHistory();
+const charts = new Charts(
+  {
+    'chart-pop': document.getElementById('chart-pop') as HTMLElement,
+    'chart-energy': document.getElementById('chart-energy') as HTMLElement,
+    'chart-traits': document.getElementById('chart-traits') as HTMLElement,
+    'chart-species': document.getElementById('chart-species') as HTMLElement,
+  },
+  histogram,
+);
 
 const renderer = new Renderer(canvas);
 
@@ -54,11 +79,19 @@ function nearestOrganism(wx: number, wy: number): number {
   return best;
 }
 
+function selectAtWorld(wx: number, wy: number): void {
+  const slot = nearestOrganism(wx, wy);
+  selectedLineage = slot >= 0 ? world.lineage[slot] : -1;
+  trailLength = 0;
+  trailSlot = -1;
+  isolateBox.checked = isolate;
+}
+
 canvas.addEventListener('pointerdown', (event: PointerEvent) => {
   const wx = toWorldX(camera, cssToDevice(event.clientX, dpr));
   const wy = toWorldY(camera, cssToDevice(event.clientY, dpr));
   if (event.shiftKey) {
-    selected = nearestOrganism(wx, wy);
+    selectAtWorld(wx, wy);
     return;
   }
   for (let n = 0; n < 8; n++) world.placeFood(wx + world.rng.range(-14, 14), wy + world.rng.range(-14, 14));
@@ -80,20 +113,31 @@ function setTurbo(value: boolean): void {
   turboButton.setAttribute('aria-pressed', String(value));
 }
 
+function setIsolate(value: boolean): void {
+  isolate = value;
+  isolateBox.checked = value;
+}
+
+isolateBox.addEventListener('change', () => setIsolate(isolateBox.checked));
+
 function resetWorld(): void {
   const seed = seedInput.value.trim() || String(DEFAULT_PARAMS.seed);
   seedInput.value = seed;
   params.seed = seed;
-  history.replaceState(null, '', `?seed=${encodeURIComponent(seed)}`);
+  window.history.replaceState(null, '', `?seed=${encodeURIComponent(seed)}`);
   world = new World(params);
   clock = createClock();
-  selected = -1;
+  metrics.reset();
+  charts.update(metrics);
+  selectedLineage = -1;
+  trailLength = 0;
+  trailSlot = -1;
 }
 
 playPause.addEventListener('click', () => setPaused(!paused));
 stepButton.addEventListener('click', () => {
   world.step();
-  if (!turbo) renderer.draw(world, camera, { alpha: 1, selected });
+  if (!turbo) draw(1);
 });
 turboButton.addEventListener('click', () => setTurbo(!turbo));
 resetButton.addEventListener('click', resetWorld);
@@ -110,10 +154,59 @@ window.addEventListener('keydown', (event: KeyboardEvent) => {
     world.step();
   } else if (event.key === 't') {
     setTurbo(!turbo);
-  } else if (event.key === 's') {
+  } else if (event.key === 'i') {
+    setIsolate(!isolate);
+  } else if (event.key >= '1' && event.key <= '8') {
+    // one key walks the allowed speeds 1 -> 2 -> 4 -> 8 -> 1
     setSpeed(nextSpeed(speed));
   }
 });
+
+function draw(alpha: number, selected = -1): void {
+  renderer.draw(world, camera, {
+    alpha,
+    selected,
+    isolateLineage: isolate ? selectedLineage : -1,
+    trail: trailLength > 1 ? trail : null,
+    trailLength,
+  });
+}
+
+function pushTrail(slot: number): void {
+  if (slot < 0) {
+    trailLength = 0;
+    trailSlot = -1;
+    return;
+  }
+  if (slot !== trailSlot) {
+    // a different slot means the array compacted or this organism died: start a fresh trail
+    trailLength = 0;
+    trailSlot = slot;
+  }
+  if (trailLength === TRAIL_CAPACITY) {
+    trail.copyWithin(0, 2);
+    trailLength--;
+  }
+  trail[trailLength * 2] = world.x[slot];
+  trail[trailLength * 2 + 1] = world.y[slot];
+  trailLength++;
+}
+
+function formatGene(name: string, value: number): string {
+  const gene = GENES[name as keyof typeof GENES];
+  return gene.max <= 1 ? value.toFixed(2) : value.toFixed(1);
+}
+
+function inspectorText(slot: number): string {
+  if (selectedLineage < 0) return 'shift+click an organism to inspect it';
+  if (slot < 0) return `lineage #${selectedLineage} died — its lineage stays isolated until you pick another`;
+  const genes = GENE_NAMES.map((name) => `${name} ${formatGene(name, world.gene[name][slot])}`).join('\n  ');
+  return [
+    `lineage #${selectedLineage} · slot ${slot} · gen ${world.gen[slot]} · age ${Math.round(world.age[slot])} ticks`,
+    `energy ${world.energy[slot].toFixed(0)}/${world.gene.reproThreshold[slot].toFixed(0)} · radius ${world.gene.radius[slot].toFixed(2)}`,
+    `  ${genes}`,
+  ].join('\n');
+}
 
 let lastFrame = performance.now();
 const TURBO_TICK_MS = 12;
@@ -130,24 +223,30 @@ function frame(now: number): void {
   const started = performance.now();
   const tickBefore = world.tick;
   let alpha = 1;
+  let selected = -1;
   if (!paused) {
     if (turbo) {
       // Turbo spends ~12 ms of each frame on ticks and draws the rest of the frame, so the view
-      // keeps moving instead of freezing at 2-3 fps. Cap 4000 ticks: a frame still cannot stall
-      // forever on a huge population.
+      // keeps moving instead of freezing at 2-3 fps.
       runTimeBoxed(world, 4000, TURBO_TICK_MS, () => performance.now());
     } else {
       alpha = advance(world, clock, elapsed, speed, MAX_TICKS_PER_FRAME);
     }
   }
+  if (selectedLineage >= 0) selected = world.slotOfLineage(selectedLineage);
+  pushTrail(selected);
   windowTicks += world.tick - tickBefore;
   windowSimMs += performance.now() - started;
 
-  renderer.draw(world, camera, { alpha, selected });
+  draw(alpha, selected);
   frames++;
 
   if (now - lastHud > 250) {
     const report = world.report();
+    metrics.sample(report);
+    charts.update(metrics);
+    charts.drawHistogram(report.sizeBins);
+
     const m = report.means;
     const fps = Math.round((frames * 1000) / (now - lastHud));
     const msPerTick = windowTicks > 0 ? windowSimMs / windowTicks : 0;
@@ -161,14 +260,8 @@ function frame(now: number): void {
       // means move as selection acts, so they are the quickest visible sign evolution is happening
       `mean genome · r ${m.radius.toFixed(1)} · v ${m.maxSpeed.toFixed(0)} · sense ${m.senseRadius.toFixed(0)} · meta ${m.metabolism.toFixed(2)} · seek ${m.seekFood.toFixed(2)} · flee ${m.flee.toFixed(2)}`,
     ];
-    if (selected >= 0 && selected < world.alive) {
-      lines.push(
-        `organism #${selected} · gen ${world.gen[selected]} · energy ${world.energy[selected].toFixed(0)}/${world.gene.reproThreshold[selected].toFixed(0)} · ` +
-          `radius ${world.gene.radius[selected].toFixed(2)} · sense ${world.gene.senseRadius[selected].toFixed(0)} · ` +
-          `speed ${world.gene.maxSpeed[selected].toFixed(0)} · hue ${world.gene.hue[selected].toFixed(0)}`,
-      );
-    }
     hud.textContent = lines.join('\n');
+    inspector.textContent = inspectorText(selected);
   }
 
   requestAnimationFrame(frame);
@@ -176,5 +269,22 @@ function frame(now: number): void {
 
 requestAnimationFrame(frame);
 
-// Debug handle for the console: inspect or poke the live world.
-(globalThis as Record<string, unknown>).arena = { world: () => world, params, renderer };
+// Debug handle for the console and the headless check: poke the live world, count what the graph
+// buffers hold (the bounded-memory claim is only meaningful with the real loop running).
+(globalThis as Record<string, unknown>).arena = {
+  world: () => world,
+  params,
+  renderer,
+  charts: () => charts,
+  metrics: () => metrics,
+  memory: () => {
+    // Chrome-only performance.memory; other browsers return null and the headless check says so.
+    const withMemory = performance as Performance & { memory?: { usedJSHeapSize: number } };
+    return withMemory.memory ? { usedJSHeapSize: withMemory.memory.usedJSHeapSize } : null;
+  },
+  uPlotCount: () => document.querySelectorAll('.u-wrap').length,
+  uPlotCanvases: () => document.querySelectorAll('.u-wrap canvas').length,
+  // same code path a shift+click takes, so the headless check can select a known organism
+  select: (index = 0) => selectAtWorld(world.x[index], world.y[index]),
+  isolate: (value = true) => setIsolate(value),
+};

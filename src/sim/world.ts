@@ -41,6 +41,8 @@ export interface WorldReport {
   means: GeneMeans;
   species: SpeciesClass[];
   speciesCount: number;
+  /** Every size bin, ascending by radius, including classes too small to count as a species. */
+  sizeBins: SpeciesClass[];
 }
 
 const GENE_KEYS = Object.keys(GENES) as GeneName[];
@@ -243,6 +245,13 @@ export class World {
     }
     species.sort((a, b) => b.count - a.count);
 
+    // every size class, counted even when too small to call a species: the histogram panel needs it
+    const sizeBins: SpeciesClass[] = [];
+    for (const [key, bin] of bins) {
+      sizeBins.push({ radius: (key + 0.5) * binWidth, hue: bin.hue / bin.count, count: bin.count });
+    }
+    sizeBins.sort((a, b) => a.radius - b.radius);
+
     return {
       tick: this.tick,
       organisms: this.alive,
@@ -252,7 +261,17 @@ export class World {
       means,
       species,
       speciesCount: species.length,
+      sizeBins,
     };
+  }
+
+  /** Current slot of a lineage id, or -1. Slots move when the array compacts, so the inspector and
+   *  isolate track the lineage and look the slot up again each frame. */
+  slotOfLineage(lineageId: number): number {
+    for (let i = 0; i < this.alive; i++) {
+      if (this.lineage[i] === lineageId) return i;
+    }
+    return -1;
   }
 
   private threatSource = -1;

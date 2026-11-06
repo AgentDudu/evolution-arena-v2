@@ -15,6 +15,9 @@ const CANDIDATES = [
 
 const url = process.argv[2] ?? 'http://localhost:4321/?seed=check';
 const seconds = Number(process.argv[3] ?? 4);
+// Optional longer turbo soak: prints heap and buffer occupancy every 10 s, which is how the
+// "no heap growth" half of the graphs done-when gets measured in a real browser.
+const soakSeconds = Number(process.argv[4] ?? 0);
 const port = 9333;
 
 const bin = CANDIDATES.find((p) => existsSync(p));
@@ -30,6 +33,9 @@ const browser = spawn(bin, [
   '--no-sandbox',
   `--user-data-dir=${profile}`,
   `--remote-debugging-port=${port}`,
+  // exposes window.gc() so the soak can report heap after a real collection, not Chrome's lazily
+  // deferred one — otherwise "no heap growth" cannot be told apart from "not collected yet"
+  '--js-flags=--expose-gc',
   '--window-size=1280,720',
   'about:blank',
 ]);
@@ -79,6 +85,24 @@ const expression = `(async () => {
       if (data[i] !== 11 || data[i + 1] !== 15 || data[i + 2] !== 20) ink++;
     }
 
+    // graph panels exist and painted: 4 uPlot roots + a histogram with visible bars
+    const panels = window.arena.uPlotCount();
+    const hist = document.getElementById('histogram');
+    const hdata = hist.getContext('2d').getImageData(0, 0, hist.width, hist.height).data;
+    let histInk = 0;
+    for (let i = 3; i < hdata.length; i += 4) if (hdata[i] !== 0) histInk++;
+    const uPlotInk = window.arena.uPlotCanvases();
+
+    // inspector: select a known organism through the same path shift+click uses, then toggle isolate
+    window.arena.select(0);
+    await new Promise((r) => setTimeout(r, 400));
+    const inspectorText = document.getElementById('inspector').textContent.slice(0, 90);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i' }));
+    const isolated = document.getElementById('isolate').checked;
+
+    const heapBefore = window.arena.memory();
+    const samplesBefore = window.arena.metrics().length;
+
     document.getElementById('turbo').click();
     const turboStartTick = w.tick;
     const turboStart = performance.now();
@@ -86,6 +110,44 @@ const expression = `(async () => {
     const afterTurbo = window.arena.world();
     const turbo = { ticks: afterTurbo.tick - turboStartTick, perSecond: (afterTurbo.tick - turboStartTick) / ((performance.now() - turboStart) / 1000) };
     document.getElementById('turbo').click();
+
+    const metrics = window.arena.metrics();
+    const heapAfter = window.arena.memory();
+    const mb = (m) => (m === null ? null : Math.round((m.usedJSHeapSize / 1048576) * 10) / 10);
+
+    // heap and buffer samples across a sustained turbo run; the buffer must never pass capacity.
+    // The points array lives outside the try so a failure halfway still reports what was measured.
+    const soakPoints = [];
+    const soak = { seconds: ${soakSeconds}, points: soakPoints, ticksRun: 0, error: null, worldType: null, arenaKeys: null };
+    if (${soakSeconds} > 0) {
+      try {
+        soak.worldType = typeof window.arena.world;
+        soak.arenaKeys = Object.keys(window.arena);
+        document.getElementById('turbo').click();
+        const soakStartTick = window.arena.world().tick;
+        for (let i = 0; i < Math.ceil(${soakSeconds} / 10); i++) {
+          await new Promise((r) => setTimeout(r, 10000));
+          if (globalThis.gc) globalThis.gc();
+          await new Promise((r) => setTimeout(r, 100));
+          const m = window.arena.metrics();
+          const w2 = window.arena.world();
+          soakPoints.push({
+            atSeconds: (i + 1) * 10,
+            tick: w2.tick,
+            pop: w2.alive,
+            heapMB: mb(window.arena.memory()),
+            samples: m.length,
+            capacity: m.capacity,
+            stride: m.stride,
+          });
+        }
+        soak.ticksRun = window.arena.world().tick - soakStartTick;
+        document.getElementById('turbo').click();
+      } catch (soakFailure) {
+        soak.error = String(soakFailure);
+        soak.href = location.href;
+      }
+    }
 
     return {
       realtime,
@@ -96,10 +158,28 @@ const expression = `(async () => {
       meanGeneration: Number(afterTurbo.report().meanGeneration.toFixed(2)),
       inkRatio: Number((ink / (data.length / 4)).toFixed(4)),
       canvasPixels: [el.width, el.height],
+      graph: {
+        panels,
+        uPlotCanvases: uPlotInk,
+        histogramInkPixels: histInk,
+        samplesBefore,
+        samplesAfter: metrics.length,
+        capacity: metrics.capacity,
+        stride: metrics.stride,
+        coveredTicks: metrics.length > 1 ? metrics.tick[metrics.length - 1] - metrics.tick[0] : 0,
+        heapMB: { before: mb(heapBefore), after: mb(heapAfter) },
+      },
+      soak,
+      inspector: { text: inspectorText, isolateToggled: isolated },
       hud: document.getElementById('hud').textContent,
     };
   } catch (error) {
-    return { error: String(error), hasArena: typeof window.arena };
+    return {
+      error: String(error),
+      hasArena: typeof window.arena,
+      arenaKeys: window.arena ? Object.keys(window.arena) : null,
+      url: location.href,
+    };
   }
 })()`;
 
@@ -150,6 +230,11 @@ const evaluated = await call('Runtime.evaluate', { expression, awaitPromise: tru
 console.log(JSON.stringify(evaluated, null, 2));
 if (problems.length > 0) console.log('page exceptions:', problems);
 
+// the payload carries an `error` only when something actually threw; a null soak.error is normal,
+// so a substring search over the whole JSON would fail every run
+type Payload = { error?: string; soak?: { error?: string | null } };
+const payload = ((evaluated.result as { result?: { value?: Payload } } | undefined)?.result?.value ?? {}) as Payload;
+
 socket.close();
 browser.kill();
-process.exitCode = problems.length > 0 || JSON.stringify(evaluated).includes('error') ? 1 : 0;
+process.exitCode = problems.length > 0 || payload.error !== undefined || payload.soak?.error != null ? 1 : 0;
