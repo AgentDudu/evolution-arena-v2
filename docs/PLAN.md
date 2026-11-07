@@ -406,8 +406,8 @@ Each item is independently mergeable to `develop` and leaves the app running.
 | 7 | Save & share | autosave, named slots, seed+params+log replay, share link, CSV/JSON export | a share link reproduces the sender's `stateHash` at its tick count | M |
 | 8 | Hardening & polish | perf pass vs budgets, keyboard shortcuts, mobile/touch basics, README how-to-run, error boundary, `precommit-scan` hook | budgets in §10 met on a mid-range laptop; fresh clone runs with `pnpm i && pnpm dev` | M |
 
-Done so far: items 1-4, 4b, 5 and 6 are merged. Item 5's remaining sub-deliverables (delete tool,
-live sim param editors, events) are not built; the item's done-when is met and its evidence is below. Item 4 evidence — `test/predation.test.ts` holds the
+Done so far: items 1-4, 4b, 5 (release tool and its delete / live-params / events remainder) and 6 are
+merged; the item's done-when is met and its evidence is below. Item 4 evidence — `test/predation.test.ts` holds the
 rule (overlap + ratio + both size floors + one kill per hunter + energy cap) and shows two radius
 morphs separated by >= 4 units coexisting for over 5 sim-minutes; the HUD prints the class count.
 
@@ -443,6 +443,26 @@ real DOM path (copy wild mean -> radius 15.5, hue 300 -> count 12 -> arm -> poin
 centre): 12 placed, 12 alive after 900 ms, and the ring pass added 153 sampled pixels over the same
 canvas baseline. Two real bugs surfaced on the way: the arm button had no click listener (only `e`),
 and with isolate on, released organisms go through the dim pass and never reach the ring pass.
+
+Item 5 remainder (measured, `test/sandbox.test.ts`) — `deleteAt(slot)` removes one organism between
+ticks and reuses the death path's compaction, so the last slot moves into the hole and the inspector,
+tracking lineage ids, reports the organism as dead. `organismAt(x, y, slack)` scans the population
+linearly on purpose: the movement grid is only rebuilt inside `step`, so trusting it between ticks
+would delete whoever happened to stand there last tick, and the tools move slots outside the tick. Six
+sim knobs apply to the running world (`foodPerTick`, `bigFoodShare`, `foodSmallPenalty`,
+`predationRatio`, `preyMinRadius`, `mutationRate`) plus `predationEnabled` and `reseedOnEmpty`; keys
+that size buffers and grids (`worldWidth/Height`, `maxOrganisms`, `foodCap`) or fix the run's identity
+(`seed`, `configVersion`, `wallMode`, `dt`) are refused, and every accepted patch goes through
+`validateParams` first. The world now holds a copy of its params, so a live edit cannot reach through
+into the object the page builds the next world from. Three events: food bloom (stops at `foodCap`),
+catastrophe (one rng draw per organism) and mutation burst (one ordinary `mutateGene` round on every
+genome, which is why genes stay inside their ranges). Logging is the reproducibility half: two
+identically seeded worlds ran 600 ticks, applied `catastrophe(0.5)`, and ended with the same kill
+count, the same population and the same `stateHash`; `world.events` keeps
+`{tick, kind, value|patch}` in order, and that is the list item 7's share link replays. In the browser
+the check drives the real controls and gates on each: delete toggle -> pointerdown on a body (1018 ->
+1017), `foodPerTick` slider -> 25 in the live world, predation checkbox -> false, catastrophe
+1017 -> 478, food bloom +36 up to the 1500 cap, 6 perturbations logged.
 
 Item 4b (measured, `scripts/foodweb.ts`) — item 4 only held for 5 sim-minutes. At a full sim hour the
 old default world was a giant monoculture: mean radius 15.4 against a ceiling of 16, dwarf class down

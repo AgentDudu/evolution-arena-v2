@@ -1,11 +1,11 @@
 // Browser entry: world + fixed-step loop + aerial renderer + graphs + organism inspector + the
-// sandbox release tool. Sim param editing and events are not wired up yet.
+// sandbox tools (release a designed genome, delete one, change the sim and fire events mid-run).
 
 import { Charts } from './render/charts.ts';
 import { MetricsHistory } from './sim/history.ts';
 
 import { DEFAULT_PARAMS, GENES, GENE_NAMES, nextSpeed, type GeneName, type SimParams } from './core/config.ts';
-import { cssToDevice, fitCamera, toWorldX, toWorldY, type Camera } from './render/camera.ts';
+import { cssToDevice, fitCamera, toPixelX, toPixelY, toWorldX, toWorldY, type Camera } from './render/camera.ts';
 import { Renderer } from './render/renderer.ts';
 import { advance, createClock, runTimeBoxed } from './sim/loop.ts';
 import { World } from './sim/world.ts';
@@ -24,6 +24,14 @@ const engineerGenes = document.getElementById('engineer-genes') as HTMLElement;
 const engineerCount = document.getElementById('engineer-count') as HTMLInputElement;
 const engineerArm = document.getElementById('engineer-arm') as HTMLButtonElement;
 const engineerWild = document.getElementById('engineer-wild') as HTMLButtonElement;
+const engineerDelete = document.getElementById('engineer-delete') as HTMLButtonElement;
+const eventBloom = document.getElementById('ev-bloom') as HTMLButtonElement;
+const eventCatastrophe = document.getElementById('ev-cat') as HTMLButtonElement;
+const eventBurst = document.getElementById('ev-burst') as HTMLButtonElement;
+const simParamsBox = document.getElementById('sim-params') as HTMLElement;
+const simStatus = document.getElementById('sim-status') as HTMLElement;
+const simPredation = document.getElementById('sim-predation') as HTMLInputElement;
+const simReseed = document.getElementById('sim-reseed') as HTMLInputElement;
 const speedButtons = [...document.querySelectorAll<HTMLButtonElement>('button[data-speed]')];
 
 const urlSeed = new URLSearchParams(location.search).get('seed');
@@ -92,6 +100,79 @@ function setGenomeFrom(values: Partial<Record<GeneName, number>>): void {
 }
 
 let armed = false;
+let deleting = false;
+
+/**
+ * Sim knobs the running world accepts. Keys that size buffers and grids (world size, maxOrganisms,
+ * foodCap) or fix the run's identity (seed, dt, wallMode) get no control here, because
+ * World.setParams refuses them — a slider that can only ever error is worse than no slider.
+ */
+const LIVE_PARAMS: { key: keyof SimParams; min: number; max: number; step: number }[] = [
+  { key: 'foodPerTick', min: 0, max: 60, step: 1 },
+  { key: 'bigFoodShare', min: 0, max: 1, step: 0.05 },
+  { key: 'foodSmallPenalty', min: 0, max: 1, step: 0.05 },
+  { key: 'predationRatio', min: 1, max: 3, step: 0.05 },
+  { key: 'preyMinRadius', min: 0, max: 16, step: 0.5 },
+  { key: 'mutationRate', min: 0, max: 1, step: 0.01 },
+];
+
+function setSimStatus(text: string): void {
+  simStatus.textContent = text;
+}
+
+/** A control must never display a value the sim refused, so a rejected edit puts the control back. */
+function applyParam(key: keyof SimParams, value: number | boolean, input?: HTMLInputElement): void {
+  try {
+    world.setParams({ [key]: value } as Partial<SimParams>);
+    // the page holds its own params object and resetWorld builds the next world from it, so the edit
+    // has to land there too or a reset silently drops what the slider set
+    Object.assign(params, { [key]: value });
+    setSimStatus(`${String(key)} = ${String(value)}`);
+  } catch (err) {
+    if (input !== undefined) input.value = String(world.params[key]);
+    setSimStatus(`refused: ${String((err as Error).message).split('\n')[0]}`);
+  }
+}
+
+const formatParam = (spec: { key: keyof SimParams; max: number }, value: unknown): string =>
+  typeof value === 'number' ? (spec.max <= 1 ? value.toFixed(2) : String(Math.round(value * 100) / 100)) : String(value);
+
+for (const spec of LIVE_PARAMS) {
+  const label = document.createElement('label');
+  label.textContent = String(spec.key);
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = String(spec.min);
+  input.max = String(spec.max);
+  input.step = String(spec.step);
+  input.value = String(params[spec.key]);
+  input.id = `sim-${String(spec.key)}`;
+  label.htmlFor = input.id;
+  input.setAttribute('aria-label', String(spec.key));
+  const value = document.createElement('span');
+  value.className = 'v';
+  value.textContent = formatParam(spec, params[spec.key]);
+  input.addEventListener('input', () => {
+    applyParam(spec.key, Number(input.value), input);
+    input.value = String(world.params[spec.key]);
+    value.textContent = formatParam(spec, world.params[spec.key]);
+  });
+  label.append(input, value);
+  simParamsBox.append(label);
+}
+
+simPredation.checked = params.predationEnabled;
+simReseed.checked = params.reseedOnEmpty;
+simPredation.addEventListener('change', () => applyParam('predationEnabled', simPredation.checked, simPredation));
+simReseed.addEventListener('change', () => applyParam('reseedOnEmpty', simReseed.checked, simReseed));
+
+eventBloom.addEventListener('click', () => setSimStatus(`food bloom · +${world.foodBloom()} particles`));
+eventCatastrophe.addEventListener('click', () => {
+  const before = world.alive;
+  const killed = world.catastrophe(0.5);
+  setSimStatus(`catastrophe · ${killed} of ${before} died`);
+});
+eventBurst.addEventListener('click', () => setSimStatus(`mutation burst · ${world.mutationBurst()} genomes nudged`));
 
 const TRAIL_CAPACITY = 96;
 const trail = new Float64Array(TRAIL_CAPACITY * 2);
@@ -119,21 +200,10 @@ function resize(): void {
 window.addEventListener('resize', resize);
 resize();
 
-function nearestOrganism(wx: number, wy: number): number {
-  let best = -1;
-  let bestD = 12; // pick tolerance in world units
-  for (let i = 0; i < world.alive; i++) {
-    const d = Math.hypot(world.x[i] - wx, world.y[i] - wy) - world.gene.radius[i];
-    if (d < bestD) {
-      bestD = d;
-      best = i;
-    }
-  }
-  return best;
-}
-
 function selectAtWorld(wx: number, wy: number): void {
-  const slot = nearestOrganism(wx, wy);
+  // 12 world units of slack for picking: a pointer is not a scalpel, and the organism nearest the
+  // point within that slack wins
+  const slot = world.organismAt(wx, wy, 12);
   selectedLineage = slot >= 0 ? world.lineage[slot] : -1;
   trailLength = 0;
   trailSlot = -1;
@@ -151,16 +221,36 @@ canvas.addEventListener('pointerdown', (event: PointerEvent) => {
     releaseEngineered(wx, wy);
     return;
   }
+  if (deleting) {
+    // tight slack here on purpose: removing the wrong organism is worse than missing one
+    const slot = world.organismAt(wx, wy);
+    if (slot >= 0) {
+      // read the lineage before the delete: compaction moves the last organism into the freed slot
+      setSimStatus(`deleted lineage #${world.lineage[slot]}`);
+      world.deleteAt(slot);
+    }
+    return;
+  }
   for (let n = 0; n < 8; n++) world.placeFood(wx + world.rng.range(-14, 14), wy + world.rng.range(-14, 14));
 });
 
 engineerWild.addEventListener('click', () => setGenomeFrom(world.report().means));
 engineerArm.addEventListener('click', () => setArmed(!armed));
+engineerDelete.addEventListener('click', () => setDeleting(!deleting));
 
 function setArmed(value: boolean): void {
   armed = value;
+  if (value) setDeleting(false);
   engineerArm.setAttribute('aria-pressed', String(value));
   engineerArm.textContent = value ? 'click the arena to release' : 'arm placement (e)';
+}
+
+/** Delete is a sticky mode rather than a one-shot arm: clearing a bad lineage means several clicks. */
+function setDeleting(value: boolean): void {
+  deleting = value;
+  if (value) setArmed(false);
+  engineerDelete.setAttribute('aria-pressed', String(value));
+  engineerDelete.textContent = value ? 'click an organism to delete it' : 'delete (x)';
 }
 
 /** Drop the edited genome into the live population. One release per arming, so a runaway click
@@ -238,6 +328,8 @@ window.addEventListener('keydown', (event: KeyboardEvent) => {
     setIsolate(!isolate);
   } else if (event.key === 'e') {
     setArmed(!armed);
+  } else if (event.key === 'x') {
+    setDeleting(!deleting);
   } else if (event.key >= '1' && event.key <= '8') {
     // one key walks the allowed speeds 1 -> 2 -> 4 -> 8 -> 1
     setSpeed(nextSpeed(speed));
@@ -372,6 +464,11 @@ requestAnimationFrame(frame);
   // same code path a shift+click takes, so the headless check can select a known organism
   select: (index = 0) => selectAtWorld(world.x[index], world.y[index]),
   isolate: (value = true) => setIsolate(value),
+  // where an organism sits on screen, so the headless check can click a real body instead of guessing
+  screenPoint: (index = 0) => ({
+    x: canvas.getBoundingClientRect().left + toPixelX(camera, world.x[index]) / dpr,
+    y: canvas.getBoundingClientRect().top + toPixelY(camera, world.y[index]) / dpr,
+  }),
   // release with an exact genome at a known point, bypassing the sliders: how the headless check
   // proves the tool reaches the world
   engineer: (genes: Partial<Record<GeneName, number>> = {}, count = 1, x = params.worldWidth / 2, y = params.worldHeight / 2) =>

@@ -48,6 +48,17 @@ export interface WorldReport {
   engineeredMeanRadius: number;
 }
 
+/** One sandbox perturbation, recorded in the order it was applied. A run is described by
+ *  (seed, params, ticks, events), which is what work item 7's share-link replay needs. */
+export interface WorldEvent {
+  tick: number;
+  kind: 'delete' | 'foodBloom' | 'catastrophe' | 'mutationBurst' | 'params';
+  /** How many organisms or particles the event touched; omitted for param edits. */
+  value?: number;
+  /** Param edits only: the patch that was applied after `validateParams` accepted it. */
+  patch?: Partial<SimParams>;
+}
+
 const GENE_KEYS = Object.keys(GENES) as GeneName[];
 
 export class World {
@@ -104,7 +115,9 @@ export class World {
 
   constructor(params: SimParams, seed?: Seed) {
     validateParams(params);
-    this.params = params;
+    // a copy: `setParams` edits the running world in place, and that must not reach through to the
+    // caller's object (the page keeps one params object for reset/share)
+    this.params = { ...params };
     this.rng = new Rng(seed ?? params.seed);
     this.initialSeed = seed ?? params.seed;
     this.cap = params.maxOrganisms;
@@ -229,6 +242,78 @@ export class World {
     return true;
   }
 
+  /**
+   * Every sandbox tool and event that perturbs the world records itself here. A run is described by
+   * (seed, params, ticks, events), which is what the share-link replay in work item 7 needs, so an
+   * event that skipped the log would make a shared world unreproducible.
+   */
+  readonly events: WorldEvent[] = [];
+
+  /** Sandbox tool: remove one organism between ticks (the tools run outside `step`). Returns false when
+   *  the slot is not populated. Slot indices move after compaction, like every other death. */
+  deleteAt(i: number): boolean {
+    if (i < 0 || i >= this.alive) return false;
+    this.killOrganism(i);
+    this.compact();
+    this.events.push({ tick: this.tick, kind: 'delete' });
+    return true;
+  }
+
+  /** Sandbox event: scatter extra particles, bounded by `foodCap` like every other food source.
+   *  Returns how many landed. */
+  foodBloom(count = Math.ceil(this.params.foodCap * 0.25)): number {
+    let placed = 0;
+    while (placed < count && this.spawnFood()) placed++;
+    this.events.push({ tick: this.tick, kind: 'foodBloom', value: placed });
+    return placed;
+  }
+
+  /** Sandbox event: a fraction of the population dies where it stands, each draw taken from the world
+   *  rng so the same seed at the same tick produces the same survivors. Returns how many died. */
+  catastrophe(fraction = 0.5): number {
+    let killed = 0;
+    for (let i = 0; i < this.alive; i++) {
+      if (this.rng.float() < fraction) {
+        this.killOrganism(i);
+        killed++;
+      }
+    }
+    this.compact();
+    this.events.push({ tick: this.tick, kind: 'catastrophe', value: killed });
+    return killed;
+  }
+
+  /** Sandbox event: one round of the ordinary reproduction mutation step applied to every organism,
+   *  so a genome can be pushed without waiting for generations. Returns the population it hit. */
+  mutationBurst(): number {
+    const p = this.params;
+    const n = this.alive;
+    for (let i = 0; i < n; i++) {
+      for (const k of GENE_KEYS) this.gene[k][i] = mutateGene(this.rng, k, this.gene[k][i], p);
+    }
+    this.events.push({ tick: this.tick, kind: 'mutationBurst', value: n });
+    return n;
+  }
+
+  /**
+   * Sandbox tool: change the sim mid-run. Keys that size buffers and grids (world size, maxOrganisms,
+   *  foodCap) or fix the run's identity (seed, configVersion, wallMode, dt) are refused - the arena is
+   *  already allocated for them and the state hash would stop describing one run. Everything else goes
+   *  through `validateParams` first, so a bad edit fails loudly instead of drifting.
+   */
+  setParams(patch: Partial<SimParams>): void {
+    const fixed = ['worldWidth', 'worldHeight', 'maxOrganisms', 'foodCap', 'configVersion', 'seed', 'wallMode', 'dt'] as const;
+    for (const key of fixed) {
+      const value = patch[key];
+      if (value !== undefined && value !== this.params[key]) throw new Error(`param ${key} cannot change mid-run`);
+    }
+    const merged: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(patch)) if (value !== undefined) merged[key] = value;
+    validateParams({ ...this.params, ...merged } as SimParams);
+    Object.assign(this.params, merged);
+    this.events.push({ tick: this.tick, kind: 'params', patch: merged as Partial<SimParams> });
+  }
+
   private removeFood(i: number): void {
     const last = --this.foodCount;
     this.fx[i] = this.fx[last];
@@ -337,6 +422,29 @@ export class World {
       if (this.lineage[i] === lineageId) return i;
     }
     return -1;
+  }
+
+  /**
+   * Sandbox tools: the organism whose body covers a point, or -1 when none does. A linear scan on
+   * purpose: the movement grid is only rebuilt inside `step`, and slots move when the population
+   * compacts, so trusting it between ticks would mean deleting whoever happened to be there last tick.
+   * At most maxOrganisms iterations on one pointer event, which is nothing.
+   *
+   * `slack` widens the hit because a pointer is not a scalpel, and it stays small on purpose —
+   * deleting the wrong organism by accident is worse than missing one.
+   */
+  organismAt(x: number, y: number, slack = 6): number {
+    let best = -1;
+    let bestD = Infinity;
+    for (let i = 0; i < this.alive; i++) {
+      const reach = this.gene.radius[i] + slack;
+      const d = dist2(x, y, this.x[i], this.y[i]);
+      if (d <= reach * reach && d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
   }
 
   private threatSource = -1;

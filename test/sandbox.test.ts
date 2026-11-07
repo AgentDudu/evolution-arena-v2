@@ -84,3 +84,115 @@ describe('engineer', () => {
     expect(history.series.engineered[0]).toBe(1);
   });
 });
+
+describe('sandbox tools and events', () => {
+  const wild = (overrides: Partial<SimParams> = {}): World => new World({ ...DEFAULT_PARAMS, seed: 'tools', ...overrides });
+
+  it('deleteAt removes exactly that organism and compacts', () => {
+    const world = wild({ startOrganisms: 200 });
+    for (let i = 0; i < 60; i++) world.step();
+    const before = world.alive;
+    const target = 5;
+    const deletedLineage = world.lineage[target];
+    const lastLineage = world.lineage[before - 1];
+    expect(world.deleteAt(target)).toBe(true);
+    expect(world.alive).toBe(before - 1);
+    // swap-remove: the last organism moves into the freed slot, and the deleted lineage is gone
+    expect(world.lineage[target]).toBe(lastLineage);
+    expect(world.slotOfLineage(deletedLineage)).toBe(-1);
+    expect(world.deleteAt(99_999)).toBe(false);
+    expect(world.deleteAt(-1)).toBe(false);
+  });
+
+  it('changes the running sim, and refuses the keys that size the arena', () => {
+    const params: SimParams = {
+      ...DEFAULT_PARAMS,
+      seed: 'tools',
+      startOrganisms: 60,
+      startFood: 0,
+      foodPerTick: 0,
+      foodFloor: 0,
+    };
+    const world = new World(params);
+    world.setParams({ foodPerTick: 40 });
+    for (let i = 0; i < 20; i++) world.step();
+    expect(world.foodCount).toBeGreaterThan(0);
+    // the world owns a copy: editing it live must not reach through to the caller's params object
+    expect(params.foodPerTick).toBe(0);
+    expect(() => world.setParams({ maxOrganisms: 50 })).toThrow(/cannot change mid-run/);
+    expect(() => world.setParams({ worldWidth: 10 })).toThrow(/cannot change mid-run/);
+    expect(() => world.setParams({ foodPerTick: -5 })).toThrow(/invalid SimParams/);
+    expect(world.params.foodPerTick).toBe(40);
+    expect(world.params.maxOrganisms).toBe(DEFAULT_PARAMS.maxOrganisms);
+  });
+
+  it('catastrophe is deterministic, so a shared world replays the same survivors', () => {
+    const run = (): { alive: number; killed: number; hash: number; before: number } => {
+      const world = new World({ ...DEFAULT_PARAMS, seed: 'bottleneck', startOrganisms: 400 });
+      for (let i = 0; i < 600; i++) world.step();
+      const before = world.alive;
+      const killed = world.catastrophe(0.5);
+      return { alive: world.alive, killed, hash: world.stateHash(), before };
+    };
+    const a = run();
+    const b = run();
+    expect(a.before).toBeGreaterThan(300);
+    expect(a.killed).toBe(b.killed);
+    expect(a.alive).toBe(b.alive);
+    expect(a.hash).toBe(b.hash);
+    // a coin flip over hundreds of organisms lands near its stated fraction
+    expect(a.killed).toBeGreaterThan(a.before * 0.35);
+    expect(a.killed).toBeLessThan(a.before * 0.65);
+  });
+
+  it('foodBloom stops at the cap and mutationBurst keeps genomes expressible', () => {
+    const world = wild({ startFood: DEFAULT_PARAMS.foodCap - 20 });
+    expect(world.foodCount).toBe(DEFAULT_PARAMS.foodCap - 20);
+    expect(world.foodBloom(500)).toBe(20); // foodCap stays a hard ceiling
+    expect(world.foodCount).toBe(DEFAULT_PARAMS.foodCap);
+
+    const radii = Float64Array.from(world.gene.radius.subarray(0, world.alive));
+    world.mutationBurst();
+    let changed = 0;
+    let min = Infinity;
+    let max = -Infinity;
+    for (let i = 0; i < world.alive; i++) {
+      if (world.gene.radius[i] !== radii[i]) changed++;
+      min = Math.min(min, world.gene.radius[i]);
+      max = Math.max(max, world.gene.radius[i]);
+    }
+    expect(changed).toBeGreaterThan(0);
+    expect(min).toBeGreaterThanOrEqual(GENES.radius.min);
+    expect(max).toBeLessThanOrEqual(GENES.radius.max);
+  });
+
+  it('organismAt hits the body under a point and refuses a point in open water', () => {
+    const world = new World({ ...DEFAULT_PARAMS, seed: 'click', maxOrganisms: 10, startOrganisms: 1, startFood: 0 });
+    expect(world.alive).toBe(1);
+    expect(world.organismAt(world.x[0], world.y[0])).toBe(0);
+    // the opposite corner of the arena, well beyond any body plus the slack
+    const far = world.organismAt(
+      world.params.worldWidth - world.x[0],
+      world.params.worldHeight - world.y[0],
+    );
+    expect(far).toBe(-1);
+    expect(world.deleteAt(far)).toBe(false);
+    expect(world.alive).toBe(1);
+    expect(world.deleteAt(world.organismAt(world.x[0], world.y[0]))).toBe(true);
+    expect(world.alive).toBe(0);
+  });
+
+  it('records every perturbation with the tick it happened on', () => {
+    const world = wild();
+    for (let i = 0; i < 45; i++) world.step();
+    world.foodBloom(5);
+    world.catastrophe(0.1);
+    world.mutationBurst();
+    world.deleteAt(0);
+    world.setParams({ predationRatio: 1.6 });
+    expect(world.events.map((e) => e.kind)).toEqual(['foodBloom', 'catastrophe', 'mutationBurst', 'delete', 'params']);
+    expect(world.events[0].tick).toBe(45);
+    expect(world.events[4].patch).toEqual({ predationRatio: 1.6 });
+    expect(world.params.predationRatio).toBe(1.6);
+  });
+});
