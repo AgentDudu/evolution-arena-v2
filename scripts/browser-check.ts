@@ -99,6 +99,62 @@ const expression = `(async () => {
     for (let i = 3; i < hdata.length; i += 4) if (hdata[i] !== 0) histInk++;
     const uPlotInk = window.arena.uPlotCanvases();
 
+    // Layout gates for the panel restyle: the column must fit its own width (it used to be 405 px of
+    // content in a 306 px column, which put a sideways scrollbar inside the panel), the inspector must
+    // be pinned where it can be seen without scrolling past the run section, and the theme switch must
+    // not disturb the plots or the arena field.
+    const aside = document.getElementById('graphs');
+    const layout = {
+      overflowX: aside.scrollWidth - aside.clientWidth,
+      contentHeight: aside.scrollHeight,
+      viewportHeight: aside.clientHeight,
+      inspectorPinned: false,
+      geneRowWidth: 0,
+      geneSliderWidth: 0,
+      panelFont: '',
+      contrast: {},
+      lowContrast: [],
+      theme: '',
+    };
+    const asideBox = aside.getBoundingClientRect();
+    const inspectCard = document.getElementById('sec-inspect').getBoundingClientRect();
+    layout.inspectorPinned = inspectCard.top >= asideBox.top - 1 && inspectCard.bottom <= asideBox.bottom + 1;
+    const geneLabel = document.querySelector('#engineer-genes label');
+    layout.geneRowWidth = geneLabel === null ? 0 : Math.round(geneLabel.getBoundingClientRect().width);
+    const themeButton = document.getElementById('theme');
+    themeButton.click();
+    const wentLight = document.documentElement.dataset.theme === 'light';
+    const lightPanels = window.arena.uPlotCount();
+    // legibility while light: the chart card deliberately stays dark, so anything sitting on it needs
+    // ink that reads on a dark surface even when the rest of the panel went light
+    const lum = (c) => {
+      const n = (c.match(/\\d+/g) || [0, 0, 0]).map(Number);
+      return (0.2126 * n[0] + 0.7152 * n[1] + 0.0722 * n[2]) / 255;
+    };
+    const contrast = (name, fg, bg) => {
+      const d = Math.abs(lum(fg) - lum(bg));
+      layout.contrast[name] = Math.round(d * 100);
+      if (d < 0.22) layout.lowContrast.push(name + ' Δ' + d.toFixed(2));
+    };
+    const plot = document.getElementById('sec-charts');
+    const plotBg = getComputedStyle(plot).backgroundColor;
+    contrast('plot caption on the dark plot surface', getComputedStyle(document.querySelector('#sec-charts .cap')).color, plotBg);
+    contrast('heading on the plot surface', getComputedStyle(plot.querySelector('h2')).color, plotBg);
+    contrast('panel text on the panel', getComputedStyle(aside).color, getComputedStyle(aside).backgroundColor);
+    contrast('card text on a card', getComputedStyle(document.querySelector('#sec-run h2')).color, getComputedStyle(document.getElementById('sec-run')).backgroundColor);
+    contrast('button label on a button', getComputedStyle(document.getElementById('run-share')).color, getComputedStyle(document.getElementById('run-share')).backgroundColor);
+    contrast('inspector text on its card', getComputedStyle(document.getElementById('inspector')).color, getComputedStyle(document.getElementById('sec-inspect')).backgroundColor);
+    // the hud and hint overlays are skipped here: their background is a colour-mix with alpha, so the
+    // computed value is not an opaque colour and a luminance difference against it would be meaningless
+    const geneRow = document.querySelector('#engineer-genes label');
+    layout.geneSliderWidth = Math.round(geneRow.querySelector('input').getBoundingClientRect().width);
+    layout.panelFont = getComputedStyle(aside).fontFamily.split(',')[0].replace(/"/g, '');
+    themeButton.click();
+    layout.theme =
+      wentLight && lightPanels === panels && document.documentElement.dataset.theme !== 'light'
+        ? 'ok'
+        : 'light=' + String(wentLight) + ' panelsInLight=' + String(lightPanels) + ' panels=' + String(panels) + ' backTo=' + String(document.documentElement.dataset.theme ?? 'dark');
+
     // inspector: select a known organism through the same path shift+click uses, then toggle isolate
     window.arena.select(0);
     await new Promise((r) => setTimeout(r, 400));
@@ -306,7 +362,8 @@ const expression = `(async () => {
       sandbox,
       tools,
       inspector: { text: inspectorText, isolateToggled: isolated },
-      hud: document.getElementById('hud').textContent,
+      layout,
+      hud: document.getElementById('hud').innerText,
     };
   } catch (error) {
     return {
@@ -391,6 +448,7 @@ type Payload = {
   bigFoodInkPixels?: number;
   graph?: { panels?: number; uPlotCanvases?: number; histogramInkPixels?: number };
   inspector?: { text?: string; isolateToggled?: boolean };
+  layout?: { overflowX?: number; contentHeight?: number; viewportHeight?: number; inspectorPinned?: boolean; geneRowWidth?: number; geneSliderWidth?: number; panelFont?: string; contrast?: Record<string, number>; lowContrast?: string[]; theme?: string };
   sandbox?: { error?: string | null; placed?: number; surviving?: number; armedLabel?: string; ringBefore?: number; ringAfter?: number };
   tools?: {
     error?: string | null;
@@ -548,6 +606,12 @@ if (payload.error === undefined) {
   if (!replay.error && !(autosave.status ?? '').includes('autosave loaded')) gates.push(`opening the page with no seed and no link did not pick up the autosaved run (${String(autosave.status)})`);
   if (!replay.error && !(autosave.status ?? '').includes('matches the sender')) gates.push('the autosaved run did not replay to its own state hash');
   if (!payload.inspector?.text?.includes('lineage')) gates.push('inspector produced no genome');
+  if ((payload.layout?.overflowX ?? 0) > 1) gates.push(`the panel scrolls sideways by ${String(payload.layout?.overflowX)} px — content is wider than the column`);
+  if (payload.layout && !payload.layout.inspectorPinned) gates.push('the inspector card is not pinned in view at the bottom of the panel');
+  if ((payload.layout?.geneRowWidth ?? 0) < 300) gates.push(`a gene row measured ${String(payload.layout?.geneRowWidth)} px, so sliders are not filling the card`);
+  if (payload.layout?.theme !== 'ok') gates.push(`the theme switch did not behave (${String(payload.layout?.theme)})`);
+  const lowContrast = payload.layout?.lowContrast ?? [];
+  if (lowContrast.length > 0) gates.push(`text below contrast Δ0.22 in the light theme: ${lowContrast.join('; ')}`);
 }
 if (gates.length > 0) console.log('gates failed:', gates);
 

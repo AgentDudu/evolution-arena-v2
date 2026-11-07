@@ -235,9 +235,13 @@ full so memory stays flat.
 - `localStorage` under `ea:autosave:v1` (every ~5 s) plus named slots `ea:slot:<name>`.
   Contents: seed, params, edit log, tick count, metric series. Not the raw world — the world is
   recomputed by replaying ticks, which keeps a save a few KB instead of MB.
-- Share link: `#s=<seed>&p=<base64 params>&log=<base64 commands>`. Opening it replays to the
-  sender's tick count. Replay is only trusted for a matching `configVersion`; mismatch shows a
-  "replaying at tick 0" notice instead of silently diverging.
+- Share link: `?run=<base64 of seed + the params the run *started* with + the edit log>`. Opening it
+  replays to the sender's tick count and the panel states both counts and whether the **stateHash
+  matches the sender** — equal hashes mean the link was interpreted correctly, not approximated. The
+  link carries starting params, never the live ones, or a mid-run slider edit would rewrite tick 0.
+  Replay is only trusted for a matching `configVersion`; a mismatch shows a notice instead of silently
+  diverging. A link over ~1800 characters (a long run's edit log) is refused with a message rather
+  than truncated, and an edit log past 3000 commands fails the encode rather than overflow a counter.
 - No network calls at all. No analytics, no CDN, no fonts. Everything ships from the bundle.
 - Privacy: no personal data of any kind enters the app or the repo. The only identity present is
   the git author email in commit metadata, which comes from the local git config.
@@ -328,7 +332,11 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
 - `scripts/browser-check.ts` (`pnpm browser-check`, needs `vite preview`) — drives headless Edge over
   CDP: asserts no page exception, reports real-time ticks/s, turbo ticks/s, population/food/generation,
   canvas pixel size, and the fraction of canvas pixels that differ from the background (proof the
-  frame is actually painted).
+  frame is actually painted). It also drives the sandbox tools through real DOM paths (release,
+  delete, param sliders, three events), replays a share link against the sender's own `stateHash`,
+  restores the autosave in a fresh context, and gates the panel layout: no sideways overflow inside the
+  column, the inspector pinned in view without scrolling, gene sliders filling the card, and text at
+  luminance difference >= 0.22 against its own background in both themes.
 - `predation.test.ts` — the rule on a two-organism arena with food, movement and reproduction off:
   ratio boundary, both size floors, overlap required, one kill per hunter, energy cap, predation
   off. `predation.long.test.ts` — the item 4 proof: two radius morphs >= 4 units apart sustained
@@ -422,6 +430,21 @@ run 240 s of turbo (59378 ticks, pop ~1400) with `--expose-gc` and saw collected
 no page exceptions; `node --expose-gc scripts/headless.ts 216000 arena-1` (a real sim hour)
 held collected heap at 8.1 -> 8.3 MB. Panels read typed-array views and normalize into reused
 buffers, so a 4 Hz graph refresh allocates nothing.
+
+Item 6 restyle evidence (owner asked for a cleaner, more modern panel) — measuring first found real
+breakage, not just taste: the column held 405 px of content in a 322 px box (a sideways scrollbar
+*inside* the panel), 1318 px of content in a 900 px viewport so the save/share block and the whole
+inspector sat below the fold, and gene labels were clipped because each cell was 72 px wide while
+`senseRadius` needs ~90 px. Restructured to one scroll column of cards (charts / sandbox / sim knobs /
+run) with the inspector pinned to the bottom of the column, a sticky header with jump links, one gene
+per row so a long key can never run over its slider, the HUD split into labelled cells instead of one
+multi-line string, a dark/light switch for the chrome, and a bottom sheet instead of `display: none`
+under 900 px. The plots are sized from their mount instead of a hard-coded 300 px, so the wider column
+is used and a resize re-measures them. The chart cards keep a dark surface in the light theme on
+purpose: the sim's colour language (yellow = engineered lineage) is calibrated against a dark field,
+and the arena canvas itself never changes. Measured after: sideways overflow 0 px, gene slider 169 px,
+inspector pinned in view, text luminance differences 0.53-0.60 against their own backgrounds in both
+themes, 4 uPlot panels still alive through the theme switch.
 
 Item 5 evidence (measured, `test/sandbox.test.ts` + `test/sandbox.long.test.ts`) — the tool: a trait
 editor (one slider per gene, gene defaults), **copy wild mean** which seeds the sliders from

@@ -19,33 +19,37 @@ interface PanelSpec {
   colors: string[];
   /** Plot each gene mean as its share of that gene's range so four scales fit one axis. */
   normalized?: boolean;
+  /** CSS height of the plot; the width always comes from the mount, so the column can resize. */
+  h: number;
 }
 
 const SPECS: PanelSpec[] = [
-  { id: 'chart-pop', title: 'population / food', columns: ['pop', 'food', 'engineered'], colors: ['#7fd3ff', '#5fd08a', '#ffe36b'] },
-  { id: 'chart-energy', title: 'total energy', columns: ['energy'], colors: ['#f4c26b'] },
+  { id: 'chart-pop', title: 'population / food', columns: ['pop', 'food', 'engineered'], colors: ['#7fd3ff', '#5fd08a', '#ffe36b'], h: 126 },
+  { id: 'chart-energy', title: 'total energy', columns: ['energy'], colors: ['#f4c26b'], h: 96 },
   {
     id: 'chart-traits',
     title: 'trait means · share of gene range',
     columns: ['radius', 'maxSpeed', 'senseRadius', 'metabolism'],
     colors: ['#ff8f6b', '#7fd3ff', '#5fd08a', '#f4c26b'],
     normalized: true,
+    h: 156,
   },
-  { id: 'chart-species', title: 'size classes called species', columns: ['species'], colors: ['#c58cff'] },
+  { id: 'chart-species', title: 'size classes called species', columns: ['species'], colors: ['#c58cff'], h: 96 },
 ];
 
 export class Charts {
-  private readonly plots: { plot: uPlot; spec: PanelSpec; scratch: Float64Array[] }[] = [];
+  private readonly plots: { plot: uPlot; spec: PanelSpec; el: HTMLElement; scratch: Float64Array[] }[] = [];
   private readonly histogram: HTMLCanvasElement | null;
 
-  constructor(mounts: Record<string, HTMLElement>, histogram: HTMLCanvasElement | null, width = 300, height = 96) {
+  constructor(mounts: Record<string, HTMLElement>, histogram: HTMLCanvasElement | null) {
     for (const spec of SPECS) {
       const mount = mounts[spec.id];
       if (mount === undefined) continue;
       const plot = new uPlot(
         {
-          width,
-          height,
+          // sized to the column, not hard-coded: a fixed 300 px plot overflowed its 306 px panel
+          width: mount.clientWidth > 0 ? mount.clientWidth : 300,
+          height: spec.h,
           scales: spec.normalized ? { x: { time: false }, y: { min: 0, max: 1 } } : { x: { time: false } },
           series: [{ label: 'tick' }, ...spec.columns.map((name, i) => ({ label: name, stroke: spec.colors[i], width: 1.5 }))],
           axes: [
@@ -58,9 +62,18 @@ export class Charts {
         [[], []],
       );
       mount.appendChild(plot.root);
-      this.plots.push({ plot, spec, scratch: [] });
+      this.plots.push({ plot, spec, el: mount, scratch: [] });
     }
     this.histogram = histogram;
+  }
+
+  /** Re-measure every plot against its mount. Called on window resize and when the column width
+   *  changes; a hidden column reports 0 width, in which case the current size is kept. */
+  resize(): void {
+    for (const entry of this.plots) {
+      const width = entry.el.clientWidth;
+      if (width > 0) entry.plot.setSize({ width, height: entry.spec.h });
+    }
   }
 
   update(history: MetricsHistory): void {
