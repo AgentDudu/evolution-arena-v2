@@ -6,20 +6,21 @@ the whole arena - no follow camera.
 
 Planning: [docs/PLAN.md](docs/PLAN.md)
 
-Status: items 1-4, 4b and 6 of the plan are in. Deterministic core (seeded PRNG, spatial hash,
+Status: items 1-4, 4b, 5 and 6 of the plan are in. Deterministic core (seeded PRNG, spatial hash,
 fixed-tick pipeline), aerial Canvas 2D renderer with play/pause/step/speed/turbo, selection that
 measurably moves the mean genome over 10 sim-minutes, and a size-structured food web that keeps a dwarf
 morph (r 4-8) and a giant morph (r ~15) side by side for a **full sim hour** on three seeds, with
 nothing in between. Plus a graphs column (population, energy, trait means, species, size histogram),
-a per-organism inspector, and a sandbox release tool: ten gene sliders, a "copy wild mean" button,
-arm + click to drop a designed genome into the running world. Delete, live param editors, events and
-save/share are not built yet.
+a per-organism inspector, and the sandbox: ten gene sliders, a "copy wild mean" button, arm + click to
+drop a designed genome into the running world, a delete mode, six sim sliders and two checkboxes that
+apply to the running world, and three events (food bloom, catastrophe, mutation burst). Save/share
+(item 7) and the performance pass (item 8) are what is left.
 
 ```sh
 pnpm install
 pnpm dev                          # http://localhost:5173 — whole world fitted to the window
-pnpm test                         # everything: 88 tests, ~4 min (long arena runs dominate)
-pnpm test:quick                   # same suite minus *.long.test.ts: 65 tests, ~5 s — the edit loop
+pnpm test                         # everything: 94 tests, ~4 min (long arena runs dominate)
+pnpm test:quick                   # same suite minus *.long.test.ts: 71 tests, ~5 s — the edit loop
 pnpm typecheck
 node scripts/headless.ts 36000    # [ticks] [seed] [json params] -> report + species + state hash
 node --expose-gc scripts/headless.ts 216000 arena-1   # a sim-hour soak: buffers + collected heap
@@ -41,6 +42,22 @@ the yellow line of the population panel. The right column graphs
 population, food, total energy, trait means as a share of each gene's range, species count, and the
 radius histogram. The inspector follows a **lineage**, not an array slot, so the tracked organism
 survives the compaction that happens whenever one dies.
+
+The rest of the sandbox panel is the god-mode half. `x` (or the button) switches on **delete mode**, a
+sticky mode because clearing a bad lineage means several clicks: each arena click then removes the
+organism whose body is under the pointer, with only 6 world units of slack since deleting the wrong one
+is worse than missing one. Three event buttons perturb the world — **food bloom** scatters particles up
+to `foodCap`, **catastrophe** kills one rng coin flip per organism where they stand, **mutation burst**
+runs the ordinary fission mutation step over every genome once, which is how you push a genome without
+waiting for generations. Six sliders and two checkboxes (food per tick, large-food share, crumb penalty,
+predation ratio, refuge radius, mutation rate, predation on/off, reseed when empty) apply to the
+**running** world, so you can watch a rule change take effect instead of restarting. Keys that size the
+arena's buffers (`worldWidth/Height`, `maxOrganisms`, `foodCap`) or fix the run's identity (`seed`, `dt`,
+`wallMode`) are refused rather than silently half-applied, and everything else goes through the same
+`validateParams` gate the world is built with. Every tool and event appends itself to `world.events`, so
+the run stays reproducible from (seed, params, ticks, events) — that list is what the item 7 share link
+will replay. The determinism is measured, not asserted: two identically seeded worlds that both hit
+`catastrophe(0.5)` at tick 600 ended with the same kill count and the same `stateHash`.
 
 Food comes in two classes: small green particles (radius 3, 25 energy) that any organism can handle,
 and large yellow-green ones (radius 8, 60 energy) that only an organism of radius ~14.5 or more can

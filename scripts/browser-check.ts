@@ -222,6 +222,65 @@ const expression = `(async () => {
       }
     }
 
+    // The rest of the sandbox, through the same DOM path a person uses: delete mode plus a click on a
+    // body, a sim slider that has to reach the running world, and the population events. Deliberately
+    // after the soak, so the throughput and memory numbers above stay on an untouched population.
+    const tools = {
+      deleteLabel: '',
+      aliveBefore: 0,
+      aliveAfterDelete: 0,
+      paramValue: 0,
+      paramStatus: '',
+      predationOff: null,
+      catBefore: 0,
+      catAfter: 0,
+      foodBefore: 0,
+      foodAfterBloom: 0,
+      foodCap: 0,
+      bloomStatus: '',
+      events: 0,
+      kinds: '',
+      error: null,
+    };
+    try {
+      const stage3 = document.getElementById('arena');
+      const del = document.getElementById('engineer-delete');
+      del.click();
+      tools.deleteLabel = del.textContent;
+      tools.aliveBefore = window.arena.world().alive;
+      const body = window.arena.screenPoint(0);
+      stage3.dispatchEvent(
+        new PointerEvent('pointerdown', { clientX: body.x, clientY: body.y, bubbles: true }),
+      );
+      tools.aliveAfterDelete = window.arena.world().alive;
+      del.click(); // delete is a sticky mode: turn it back off so nothing else gets removed
+
+      const slider = document.getElementById('sim-foodPerTick');
+      slider.value = '25';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      tools.paramValue = window.arena.world().params.foodPerTick;
+      tools.paramStatus = document.getElementById('sim-status').textContent;
+
+      const predation = document.getElementById('sim-predation');
+      predation.checked = false;
+      predation.dispatchEvent(new Event('change', { bubbles: true }));
+      tools.predationOff = window.arena.world().params.predationEnabled;
+
+      tools.catBefore = window.arena.world().alive;
+      document.getElementById('ev-cat').click();
+      tools.catAfter = window.arena.world().alive;
+      tools.foodBefore = window.arena.world().foodCount;
+      document.getElementById('ev-bloom').click();
+      tools.foodAfterBloom = window.arena.world().foodCount;
+      tools.foodCap = window.arena.world().params.foodCap;
+      tools.bloomStatus = document.getElementById('sim-status').textContent;
+      document.getElementById('ev-burst').click();
+      tools.events = window.arena.world().events.length;
+      tools.kinds = window.arena.world().events.map((e) => e.kind).join(',');
+    } catch (toolsFailure) {
+      tools.error = String(toolsFailure);
+    }
+
     return {
       realtime,
       turbo,
@@ -245,6 +304,7 @@ const expression = `(async () => {
       },
       soak,
       sandbox,
+      tools,
       inspector: { text: inspectorText, isolateToggled: isolated },
       hud: document.getElementById('hud').textContent,
     };
@@ -332,6 +392,22 @@ type Payload = {
   graph?: { panels?: number; uPlotCanvases?: number; histogramInkPixels?: number };
   inspector?: { text?: string; isolateToggled?: boolean };
   sandbox?: { error?: string | null; placed?: number; surviving?: number; armedLabel?: string; ringBefore?: number; ringAfter?: number };
+  tools?: {
+    error?: string | null;
+    deleteLabel?: string;
+    aliveBefore?: number;
+    aliveAfterDelete?: number;
+    paramValue?: number;
+    predationOff?: boolean | null;
+    catBefore?: number;
+    catAfter?: number;
+    foodBefore?: number;
+    foodAfterBloom?: number;
+    foodCap?: number;
+    bloomStatus?: string;
+    events?: number;
+    kinds?: string;
+  };
 };
 const payload = ((evaluated.result as { result?: { value?: Payload } } | undefined)?.result?.value ?? {}) as Payload;
 
@@ -349,6 +425,15 @@ if (payload.error === undefined) {
   if ((payload.sandbox?.surviving ?? 0) < 1) gates.push('the released lineage died on the spot');
   if ((payload.sandbox?.ringAfter ?? 0) - (payload.sandbox?.ringBefore ?? 0) < 40) gates.push('no engineered ring pixels appeared');
   if (!payload.sandbox?.armedLabel?.includes('release')) gates.push('arming did not change the button label');
+  if (payload.tools?.error) gates.push(`sandbox tools threw ${payload.tools.error}`);
+  if (payload.tools && (payload.tools.aliveAfterDelete ?? 0) >= (payload.tools.aliveBefore ?? 0)) gates.push('a delete-mode click removed nothing');
+  if (!payload.tools?.deleteLabel?.includes('delete')) gates.push('delete mode did not change its button label');
+  if (payload.tools?.paramValue !== 25) gates.push(`the foodPerTick slider reached ${String(payload.tools?.paramValue)} in the running world, not 25`);
+  if (payload.tools?.predationOff !== false) gates.push('the predation checkbox did not reach the running world');
+  if (payload.tools && (payload.tools.catAfter ?? 0) > (payload.tools.catBefore ?? 0) * 0.9) gates.push('catastrophe did not cut the population');
+  if (!payload.tools?.bloomStatus?.includes('food bloom')) gates.push('the food bloom button did not run');
+  if (payload.tools && ((payload.tools.foodAfterBloom ?? 0) < (payload.tools.foodBefore ?? 0) || (payload.tools.foodAfterBloom ?? 0) > (payload.tools.foodCap ?? 0))) gates.push('food bloom went past the food cap');
+  if ((payload.tools?.events ?? 0) < 5) gates.push(`the event log recorded ${String(payload.tools?.events)} perturbations, expected at least 5 (${payload.tools?.kinds ?? 'none'})`);
   if (!payload.inspector?.text?.includes('lineage')) gates.push('inspector produced no genome');
 }
 if (gates.length > 0) console.log('gates failed:', gates);

@@ -39,7 +39,10 @@
       #sandbox .v { color: var(--fg); text-align: right; }
       #sandbox .row { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
       b { color: var(--fg); }
-      span.k { color: var(--dim); }
+      span.k, .k { color: var(--dim); }
+      /* one slider per row: the sim keys are long enough that a label needs the whole line */
+      #sim-params { grid-template-columns: 1fr; }
+      #sim-params input[type='range'] { flex: 1 1 auto; }
       button, input[type='text'] {
         font: inherit; color: var(--fg); background: #1b2530; border: 1px solid var(--line);
         border-radius: 6px; padding: 4px 8px;
@@ -70,7 +73,7 @@
 
       <div class="panel" id="hint">
         click = drop food · shift+click = inspect organism · e = arm release of an engineered organism ·
-        i = isolate its lineage · space = pause · n = step · 1/2/4/8 = speed · t = turbo
+        x = delete mode · i = isolate its lineage · space = pause · n = step · 1/2/4/8 = speed · t = turbo
       </div>
     </div>
 
@@ -88,6 +91,19 @@
           <button id="engineer-wild" type="button">copy wild mean</button>
           <button id="engineer-arm" aria-pressed="false">arm placement (e)</button>
         </div>
+        <div class="row">
+          <button id="engineer-delete" type="button" aria-pressed="false">delete (x)</button>
+          <button id="ev-bloom" type="button">food bloom</button>
+          <button id="ev-cat" type="button">catastrophe</button>
+          <button id="ev-burst" type="button">mutation burst</button>
+        </div>
+        <span class="k">sim · applies to the running world</span>
+        <div class="genes" id="sim-params"></div>
+        <div class="row">
+          <label><input id="sim-predation" type="checkbox" /> predation</label>
+          <label><input id="sim-reseed" type="checkbox" /> reseed when empty</label>
+        </div>
+        <div class="k" id="sim-status">world size and population caps stay fixed per run</div>
       </div>
       <div id="inspector"><span class="k">shift+click an organism to inspect it</span></div>
       <label><input id="isolate" type="checkbox" /> isolate its lineage (i)</label>
