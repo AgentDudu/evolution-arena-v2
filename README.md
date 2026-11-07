@@ -6,21 +6,22 @@ the whole arena - no follow camera.
 
 Planning: [docs/PLAN.md](docs/PLAN.md)
 
-Status: items 1-4, 4b, 5 and 6 of the plan are in. Deterministic core (seeded PRNG, spatial hash,
-fixed-tick pipeline), aerial Canvas 2D renderer with play/pause/step/speed/turbo, selection that
+Status: items 1-7 of the plan are in. Deterministic core (seeded PRNG, spatial hash, fixed-tick
+pipeline), aerial Canvas 2D renderer with play/pause/step/speed/turbo, selection that
 measurably moves the mean genome over 10 sim-minutes, and a size-structured food web that keeps a dwarf
 morph (r 4-8) and a giant morph (r ~15) side by side for a **full sim hour** on three seeds, with
 nothing in between. Plus a graphs column (population, energy, trait means, species, size histogram),
 a per-organism inspector, and the sandbox: ten gene sliders, a "copy wild mean" button, arm + click to
 drop a designed genome into the running world, a delete mode, six sim sliders and two checkboxes that
-apply to the running world, and three events (food bloom, catastrophe, mutation burst). Save/share
-(item 7) and the performance pass (item 8) are what is left.
+apply to the running world, and three events (food bloom, catastrophe, mutation burst). Save and share:
+`save` snapshots the world, `share` builds a link that rebuilds the identical world in another browser,
+and reopening the page picks up the last run. The performance pass (item 8) is what is left.
 
 ```sh
 pnpm install
 pnpm dev                          # http://localhost:5173 — whole world fitted to the window
-pnpm test                         # everything: 94 tests, ~4 min (long arena runs dominate)
-pnpm test:quick                   # same suite minus *.long.test.ts: 71 tests, ~5 s — the edit loop
+pnpm test                         # everything: 104 tests, ~4 min (long arena runs dominate)
+pnpm test:quick                   # same suite minus *.long.test.ts: 81 tests, ~5 s — the edit loop
 pnpm typecheck
 node scripts/headless.ts 36000    # [ticks] [seed] [json params] -> report + species + state hash
 node --expose-gc scripts/headless.ts 216000 arena-1   # a sim-hour soak: buffers + collected heap
@@ -55,9 +56,30 @@ predation ratio, refuge radius, mutation rate, predation on/off, reseed when emp
 arena's buffers (`worldWidth/Height`, `maxOrganisms`, `foodCap`) or fix the run's identity (`seed`, `dt`,
 `wallMode`) are refused rather than silently half-applied, and everything else goes through the same
 `validateParams` gate the world is built with. Every tool and event appends itself to `world.events`, so
-the run stays reproducible from (seed, params, ticks, events) — that list is what the item 7 share link
-will replay. The determinism is measured, not asserted: two identically seeded worlds that both hit
+the run stays reproducible from (seed, params, ticks, events) — that list is what the share link replays.
+The determinism is measured, not asserted: two identically seeded worlds that both hit
 `catastrophe(0.5)` at tick 600 ended with the same kill count and the same `stateHash`.
+
+**Save, share, replay.** The panel's `save` button writes a snapshot (params + organism + food counts +
+event log) to `arena.save.v1`, and every five seconds the live world goes to `arena.autosave.v1` —
+separate keys, because the autosave overwrites constantly and a save you meant to keep should not die
+with it. `share` (or `s`) builds a link like `…/?run=1H4sIA…`: gzip + base64url, 875 characters for a
+33 951-tick run. Opening it **re-simulates** rather than restoring a state dump: the page seeds a world
+from the link's own parameters, applies the event log at its recorded ticks, and runs to the shared
+tick. That is the only representation that stays honest — a snapshot of the current world cannot tell a
+replay from the real thing, and a run whose live parameters were edited mid-flight cannot be rebuilt
+from the world's *current* parameters at all. `shareLink` therefore encodes the parameters the run
+*started* with (the ones you loaded or saved), and the sliders that changed since are re-applied as
+`params` events. The page says whether the rebuilt world's `stateHash` equals the sender's, and restores
+it **paused** at the shared tick so it does not drift while you read the number. A link that cannot
+round-trip is refused instead of half-loaded: a bad or truncated link, an out-of-range parameter, and a
+run too long to replay (over 60 000 ticks) each get their own message. A plain reload picks up the
+autosave — but an explicit `?seed=` does not, because asking for a seed means asking for that seed's
+fresh world. The proof runs in two places: headless, where a scripted run (four live edits, a
+bloom, a catastrophe, 6 500 ticks, three releases of engineered organisms) comes back with an identical
+`stateHash`, and in Chrome, where the browser check clicks `share`, opens the link in a page that never
+saw the run, and requires `stateHash` equality at the shared tick (33 951 ticks: 3 247 751 943 both
+sides) plus an autosave that restores to its own hash.
 
 Food comes in two classes: small green particles (radius 3, 25 energy) that any organism can handle,
 and large yellow-green ones (radius 8, 60 energy) that only an organism of radius ~14.5 or more can

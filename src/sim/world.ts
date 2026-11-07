@@ -49,20 +49,31 @@ export interface WorldReport {
 }
 
 /** One sandbox perturbation, recorded in the order it was applied. A run is described by
- *  (seed, params, ticks, events), which is what work item 7's share-link replay needs. */
+ *  (seed, params, ticks, events), which is what work item 7's share-link replay needs.
+ *  `value` is the event's *input*, never its result: replay starts from an identical world, so
+ *  replaying the same input reproduces the same result and the same rng consumption. */
 export interface WorldEvent {
   tick: number;
-  kind: 'delete' | 'foodBloom' | 'catastrophe' | 'mutationBurst' | 'params';
-  /** How many organisms or particles the event touched; omitted for param edits. */
+  kind: 'food' | 'release' | 'delete' | 'foodBloom' | 'catastrophe' | 'mutationBurst' | 'params';
+  /** Point tools: where in the world it happened. */
+  x?: number;
+  y?: number;
+  /** release: organism count · delete: slot · foodBloom: requested particles · catastrophe: the
+   *  fraction · mutationBurst: population it hit (informational, the event takes no input). */
   value?: number;
-  /** Param edits only: the patch that was applied after `validateParams` accepted it. */
+  /** Param edits: the patch that passed `validateParams`. Release: the designed genome. */
   patch?: Partial<SimParams>;
+  genes?: Partial<Record<GeneName, number>>;
 }
 
 const GENE_KEYS = Object.keys(GENES) as GeneName[];
 
 export class World {
   readonly params: SimParams;
+  /** The params the world was constructed with. `setParams` moves `params` but never this, because a
+   *  share link has to rebuild the *starting* world: the mid-run edits are replayed as events, and
+   *  encoding the live params instead would bake a tick-380 change into tick 0. */
+  readonly initialParams: SimParams;
   rng: Rng;
   private readonly initialSeed: Seed;
   tick = 0;
@@ -118,6 +129,7 @@ export class World {
     // a copy: `setParams` edits the running world in place, and that must not reach through to the
     // caller's object (the page keeps one params object for reset/share)
     this.params = { ...params };
+    this.initialParams = { ...params };
     this.rng = new Rng(seed ?? params.seed);
     this.initialSeed = seed ?? params.seed;
     this.cap = params.maxOrganisms;
@@ -255,21 +267,50 @@ export class World {
     if (i < 0 || i >= this.alive) return false;
     this.killOrganism(i);
     this.compact();
-    this.events.push({ tick: this.tick, kind: 'delete' });
+    this.events.push({ tick: this.tick, kind: 'delete', value: i });
     return true;
   }
 
+  /** Sandbox tool: paint a patch of food around a point, the way an arena click does. The jitter comes
+   *  from the world rng, so a replayed click puts particles in the same places. Returns how many landed
+   *  (the food cap can stop it). */
+  scatterFood(x: number, y: number, count = 8, spread = 14): number {
+    let placed = 0;
+    for (let n = 0; n < count; n++) {
+      if (this.placeFood(x + this.rng.range(-spread, spread), y + this.rng.range(-spread, spread))) placed++;
+    }
+    this.events.push({ tick: this.tick, kind: 'food', x, y, value: count });
+    return placed;
+  }
+
+  /** Sandbox tool: release a designed genome as a cluster. Count is clamped the way the release panel
+   *  clamps it, so a shared link cannot drop 10 000 organisms. Returns how many were placed. */
+  releaseCluster(x: number, y: number, count: number, genes: Partial<Record<GeneName, number>>, spread = 16): number {
+    const n = Math.max(1, Math.min(50, Math.round(Number.isFinite(count) ? count : 1)));
+    let placed = 0;
+    for (let k = 0; k < n; k++) {
+      // jitter spreads them instead of stacking every release on one point; the world rng keeps it
+      // reproducible for a given seed
+      if (this.engineer(x + this.rng.range(-spread, spread), y + this.rng.range(-spread, spread), genes) >= 0) placed++;
+    }
+    this.events.push({ tick: this.tick, kind: 'release', x, y, value: n, genes });
+    return placed;
+  }
+
   /** Sandbox event: scatter extra particles, bounded by `foodCap` like every other food source.
-   *  Returns how many landed. */
+   *  Returns how many landed. The log stores the requested count, not the landed count: replay starts
+   *  from an identical world, so asking for the same number reproduces the same result and the same
+   *  number of rng draws. */
   foodBloom(count = Math.ceil(this.params.foodCap * 0.25)): number {
     let placed = 0;
     while (placed < count && this.spawnFood()) placed++;
-    this.events.push({ tick: this.tick, kind: 'foodBloom', value: placed });
+    this.events.push({ tick: this.tick, kind: 'foodBloom', value: count });
     return placed;
   }
 
   /** Sandbox event: a fraction of the population dies where it stands, each draw taken from the world
-   *  rng so the same seed at the same tick produces the same survivors. Returns how many died. */
+   *  rng so the same seed at the same tick produces the same survivors. Returns how many died; the log
+   *  keeps the fraction, which is the input a replay needs. */
   catastrophe(fraction = 0.5): number {
     let killed = 0;
     for (let i = 0; i < this.alive; i++) {
@@ -279,7 +320,7 @@ export class World {
       }
     }
     this.compact();
-    this.events.push({ tick: this.tick, kind: 'catastrophe', value: killed });
+    this.events.push({ tick: this.tick, kind: 'catastrophe', value: fraction });
     return killed;
   }
 

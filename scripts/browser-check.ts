@@ -411,6 +411,108 @@ type Payload = {
 };
 const payload = ((evaluated.result as { result?: { value?: Payload } } | undefined)?.result?.value ?? {}) as Payload;
 
+// Stage two: open the share link as a fresh page. That is what work item 7 promises - the link has to
+// rebuild the sender's exact world, event log included, in a browser that never saw the run. The
+// restored run arrives paused, so the hash is read at the sender's tick instead of a tick or two later.
+type Replay = {
+  error?: string;
+  status?: string;
+  tick?: number;
+  hash?: number;
+  paused?: string;
+  senderTick?: number;
+  senderHash?: number;
+  linkChars?: number;
+  linkEvents?: number;
+};
+let replay: Replay = {};
+try {
+  const built = await call('Runtime.evaluate', {
+    expression: `(() => {
+      document.getElementById('run-share').click();
+      const w = window.arena.world();
+      return JSON.stringify({
+        link: document.getElementById('run-link').value,
+        tick: w.tick,
+        hash: w.stateHash(),
+        events: w.events.length,
+      });
+    })()`,
+    returnByValue: true,
+  });
+  const sender = JSON.parse(String((built.result as { result?: { value?: string } } | undefined)?.result?.value ?? '{}')) as {
+    link?: string;
+    tick?: number;
+    hash?: number;
+    events?: number;
+  };
+  if (!sender.link) throw new Error('the share button produced no link');
+  replay = { senderTick: sender.tick, senderHash: sender.hash, linkChars: sender.link.length, linkEvents: sender.events };
+  await call('Page.enable');
+  await call('Page.navigate', { url: sender.link });
+  for (let attempt = 0; attempt < 240; attempt++) {
+    await sleep(500);
+    const now = await call('Runtime.evaluate', {
+      expression: `(() => {
+        const w = window.arena && window.arena.world();
+        return JSON.stringify({
+          status: document.getElementById('run-status') ? document.getElementById('run-status').textContent : '',
+          paused: document.getElementById('playpause') ? document.getElementById('playpause').textContent : '',
+          tick: w ? w.tick : -1,
+          hash: w ? w.stateHash() : -1,
+        });
+      })()`,
+      returnByValue: true,
+    });
+    const seen = JSON.parse(String((now.result as { result?: { value?: string } } | undefined)?.result?.value ?? '{}')) as {
+      status?: string;
+      paused?: string;
+      tick?: number;
+      hash?: number;
+    };
+    if ((seen.status ?? '').includes('loaded') || (seen.status ?? '').includes('refused')) {
+      replay = { ...replay, status: seen.status, paused: seen.paused, tick: seen.tick, hash: seen.hash };
+      break;
+    }
+  }
+} catch (error) {
+  replay = { ...replay, error: String(error) };
+}
+console.log('share replay:', JSON.stringify(replay));
+
+// Stage three: open the page with no seed and no link at all. That is the autosave path - the browser
+// profile still holds the last run, and the page is supposed to pick it up instead of starting fresh.
+let autosave: { status?: string; tick?: number; error?: string } = {};
+if (!replay.error) {
+  try {
+    await call('Page.navigate', { url: url.split('?')[0] });
+    for (let attempt = 0; attempt < 120; attempt++) {
+      await sleep(500);
+      const now = await call('Runtime.evaluate', {
+        expression: `(() => {
+          const w = window.arena && window.arena.world();
+          return JSON.stringify({
+            status: document.getElementById('run-status') ? document.getElementById('run-status').textContent : '',
+            tick: w ? w.tick : -1,
+          });
+        })()`,
+        returnByValue: true,
+      });
+      const seen = JSON.parse(String((now.result as { result?: { value?: string } } | undefined)?.result?.value ?? '{}')) as {
+        status?: string;
+        tick?: number;
+      };
+      if ((seen.status ?? '').includes('loaded') || (seen.status ?? '').includes('refused')) {
+        autosave = { status: seen.status, tick: seen.tick };
+        break;
+      }
+    }
+  } catch (error) {
+    autosave = { ...autosave, error: String(error) };
+  }
+}
+console.log('autosave restore:', JSON.stringify(autosave));
+
 // count the evidence instead of eyeballing the JSON: these are what the feature work is supposed to prove
 const gates: string[] = [];
 if (payload.error === undefined) {
@@ -434,6 +536,17 @@ if (payload.error === undefined) {
   if (!payload.tools?.bloomStatus?.includes('food bloom')) gates.push('the food bloom button did not run');
   if (payload.tools && ((payload.tools.foodAfterBloom ?? 0) < (payload.tools.foodBefore ?? 0) || (payload.tools.foodAfterBloom ?? 0) > (payload.tools.foodCap ?? 0))) gates.push('food bloom went past the food cap');
   if ((payload.tools?.events ?? 0) < 5) gates.push(`the event log recorded ${String(payload.tools?.events)} perturbations, expected at least 5 (${payload.tools?.kinds ?? 'none'})`);
+  if (replay.error) gates.push(`the share replay stage threw ${replay.error}`);
+  if (!replay.error && replay.hash !== replay.senderHash) {
+    gates.push(`the share link rebuilt a different world: tick ${String(replay.tick)} hash ${String(replay.hash)} vs sender tick ${String(replay.senderTick)} hash ${String(replay.senderHash)}`);
+  }
+  if (!replay.error && replay.tick !== replay.senderTick) gates.push(`the share link landed on tick ${String(replay.tick)}, the sender was at ${String(replay.senderTick)}`);
+  if (!replay.error && (replay.linkEvents ?? 0) < 5) gates.push(`the share link carried only ${String(replay.linkEvents)} events`);
+  if (!(replay.status ?? '').includes('matches the sender')) gates.push(`the page did not report a hash match (${String(replay.status)})`);
+  if (!replay.error && replay.paused !== 'play') gates.push(`the restored run was left running (play button reads "${String(replay.paused)}"), so its state kept moving away from the shared one`);
+  if (autosave.error) gates.push(`the autosave stage threw ${autosave.error}`);
+  if (!replay.error && !(autosave.status ?? '').includes('autosave loaded')) gates.push(`opening the page with no seed and no link did not pick up the autosaved run (${String(autosave.status)})`);
+  if (!replay.error && !(autosave.status ?? '').includes('matches the sender')) gates.push('the autosaved run did not replay to its own state hash');
   if (!payload.inspector?.text?.includes('lineage')) gates.push('inspector produced no genome');
 }
 if (gates.length > 0) console.log('gates failed:', gates);

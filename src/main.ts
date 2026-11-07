@@ -8,6 +8,7 @@ import { DEFAULT_PARAMS, GENES, GENE_NAMES, nextSpeed, type GeneName, type SimPa
 import { cssToDevice, fitCamera, toPixelX, toPixelY, toWorldX, toWorldY, type Camera } from './render/camera.ts';
 import { Renderer } from './render/renderer.ts';
 import { advance, createClock, runTimeBoxed } from './sim/loop.ts';
+import { initRunPanel } from './runpanel.ts';
 import { World } from './sim/world.ts';
 
 const canvas = document.getElementById('arena') as HTMLCanvasElement;
@@ -179,7 +180,7 @@ const trail = new Float64Array(TRAIL_CAPACITY * 2);
 let trailLength = 0;
 let trailSlot = -1;
 
-const metrics = new MetricsHistory();
+let metrics = new MetricsHistory();
 const charts = new Charts(
   {
     'chart-pop': document.getElementById('chart-pop') as HTMLElement,
@@ -231,7 +232,7 @@ canvas.addEventListener('pointerdown', (event: PointerEvent) => {
     }
     return;
   }
-  for (let n = 0; n < 8; n++) world.placeFood(wx + world.rng.range(-14, 14), wy + world.rng.range(-14, 14));
+  world.scatterFood(wx, wy);
 });
 
 engineerWild.addEventListener('click', () => setGenomeFrom(world.report().means));
@@ -254,15 +255,10 @@ function setDeleting(value: boolean): void {
 }
 
 /** Drop the edited genome into the live population. One release per arming, so a runaway click
- *  cannot bury the wild population by accident. Returns how many were placed. */
+ *  cannot bury the wild population by accident. Returns how many were placed. The count clamp and the
+ *  jitter live in World.releaseCluster, which is also what a replayed link calls. */
 function releaseEngineered(wx: number, wy: number, count = Number(engineerCount.value), genes = genome): number {
-  const n = Math.max(1, Math.min(50, Math.round(Number.isFinite(count) ? count : 1)));
-  let placed = 0;
-  for (let k = 0; k < n; k++) {
-    // jitter spreads them instead of stacking every release on one point; the world rng keeps it
-    // reproducible for a given seed
-    if (world.engineer(wx + world.rng.range(-16, 16), wy + world.rng.range(-16, 16), genes) >= 0) placed++;
-  }
+  const placed = world.releaseCluster(wx, wy, count, genes);
   setArmed(false);
   return placed;
 }
@@ -439,6 +435,7 @@ function frame(now: number): void {
     }
     hud.textContent = lines.join('\n');
     inspector.textContent = inspectorText(selected);
+    runPanel.maybeAutosave(now);
   }
 
   requestAnimationFrame(frame);
@@ -475,3 +472,21 @@ requestAnimationFrame(frame);
     releaseEngineered(x, y, count, genes),
   engineeredCount: () => world.report().engineered,
 };
+
+// Save / share / replay. The panel owns its controls; the world swap has to come back here because the
+// frame loop, its clock, the metric buffers and the inspector selection all hang off the live world.
+const runPanel = initRunPanel({
+  getWorld: () => world,
+  metrics: () => metrics,
+  pause: () => setPaused(true),
+  setWorld: (next) => {
+    world = next;
+    clock = createClock();
+    metrics = new MetricsHistory();
+    selectedLineage = -1;
+    trailLength = 0;
+    trailSlot = -1;
+    seedInput.value = String(next.initialParams.seed);
+    resize();
+  },
+});
