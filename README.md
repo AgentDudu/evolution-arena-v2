@@ -44,6 +44,14 @@ population, food, total energy, trait means as a share of each gene's range, spe
 radius histogram. The inspector follows a **lineage**, not an array slot, so the tracked organism
 survives the compaction that happens whenever one dies.
 
+That column is one scroll list of cards — charts, sandbox, sim knobs, run — with the inspector **pinned**
+at its bottom, so the genome readout is reachable without scrolling past the run buttons, and the
+`charts` / `sandbox` / `run` links in its header jump straight to a card. The `light` button switches the
+panel chrome dark ↔ light and remembers the choice; the arena and the plot surfaces stay dark in either
+theme because the sim's colour language (yellow = engineered lineage) is calibrated against a dark
+field. Under 900 px wide the column becomes a sheet below the arena instead of disappearing, which is
+what it used to do on a phone.
+
 The rest of the sandbox panel is the god-mode half. `x` (or the button) switches on **delete mode**, a
 sticky mode because clearing a bad lineage means several clicks: each arena click then removes the
 organism whose body is under the pointer, with only 6 world units of slack since deleting the wrong one

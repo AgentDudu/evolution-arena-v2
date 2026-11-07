@@ -12,7 +12,21 @@ import { initRunPanel } from './runpanel.ts';
 import { World } from './sim/world.ts';
 
 const canvas = document.getElementById('arena') as HTMLCanvasElement;
-const hud = document.getElementById('hud') as HTMLElement;
+// one cell per number instead of one multi-line string: the labels stay put while the digits change,
+// so the readout does not reflow every quarter second
+const hudCell = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
+const hudValues = {
+  tick: hudCell('hud-tick'),
+  pop: hudCell('hud-pop'),
+  food: hudCell('hud-food'),
+  species: hudCell('hud-species'),
+  gen: hudCell('hud-gen'),
+  fps: hudCell('hud-fps'),
+  speed: hudCell('hud-speed'),
+  ms: hudCell('hud-ms'),
+  genome: hudCell('hud-genome'),
+  engineered: hudCell('hud-engineered'),
+};
 const inspector = document.getElementById('inspector') as HTMLElement;
 const isolateBox = document.getElementById('isolate') as HTMLInputElement;
 const histogram = document.getElementById('histogram') as HTMLCanvasElement | null;
@@ -177,6 +191,35 @@ eventBurst.addEventListener('click', () => setSimStatus(`mutation burst · ${wor
 
 const TRAIL_CAPACITY = 96;
 const trail = new Float64Array(TRAIL_CAPACITY * 2);
+// Panel chrome follows the theme; the arena field and the chart cards stay dark, because the sim's
+// colour language (yellow = engineered lineage) and the browser check's pixel gates are calibrated on
+// a dark background. Choice persists; default follows the OS.
+const themeButton = document.getElementById('theme') as HTMLButtonElement | null;
+const THEME_KEY = 'arena.theme.v1';
+
+function applyTheme(name: string): void {
+  if (name === 'light') document.documentElement.dataset.theme = 'light';
+  else delete document.documentElement.dataset.theme;
+  if (themeButton !== null) themeButton.textContent = name === 'light' ? 'dark' : 'light';
+}
+
+let theme = 'dark';
+try {
+  theme = localStorage.getItem(THEME_KEY) ?? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+} catch {
+  /* private mode: no persistence, dark stays */
+}
+applyTheme(theme);
+themeButton?.addEventListener('click', () => {
+  theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  applyTheme(theme);
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    /* private mode */
+  }
+});
+
 let trailLength = 0;
 let trailSlot = -1;
 
@@ -197,6 +240,7 @@ function resize(): void {
   const size = renderer.resize();
   dpr = size.dpr;
   camera = fitCamera(world.params.worldWidth, world.params.worldHeight, size.pixelWidth, size.pixelHeight);
+  charts.resize();
 }
 window.addEventListener('resize', resize);
 resize();
@@ -424,16 +468,22 @@ function frame(now: number): void {
     windowTicks = 0;
     windowSimMs = 0;
     lastHud = now;
-    const lines = [
-      `tick ${report.tick} · pop ${report.organisms} · food ${report.food} · gen ${report.meanGeneration.toFixed(2)} · species ${report.speciesCount}`,
-      `${fps} fps · ${turbo ? 'turbo' : `${speed}x`} · ${msPerTick.toFixed(2)} ms/tick`,
-      // means move as selection acts, so they are the quickest visible sign evolution is happening
-      `mean genome · r ${m.radius.toFixed(1)} · v ${m.maxSpeed.toFixed(0)} · sense ${m.senseRadius.toFixed(0)} · meta ${m.metabolism.toFixed(2)} · seek ${m.seekFood.toFixed(2)} · flee ${m.flee.toFixed(2)}`,
-    ];
-    if (report.engineered > 0) {
-      lines.push(`engineered ${report.engineered} of ${report.organisms} · mean r ${report.engineeredMeanRadius.toFixed(1)}`);
+    hudValues.tick.textContent = String(report.tick);
+    hudValues.pop.textContent = String(report.organisms);
+    hudValues.food.textContent = String(report.food);
+    hudValues.species.textContent = String(report.speciesCount);
+    hudValues.gen.textContent = report.meanGeneration.toFixed(2);
+    hudValues.fps.textContent = String(fps);
+    hudValues.speed.textContent = turbo ? 'turbo' : `${speed}x`;
+    hudValues.ms.textContent = msPerTick.toFixed(2);
+    // means move as selection acts, so they are the quickest visible sign evolution is happening
+    hudValues.genome.textContent = `mean genome · r ${m.radius.toFixed(1)} · v ${m.maxSpeed.toFixed(0)} · sense ${m.senseRadius.toFixed(0)} · meta ${m.metabolism.toFixed(2)} · seek ${m.seekFood.toFixed(2)} · flee ${m.flee.toFixed(2)}`;
+    const showEngineered = report.engineered > 0;
+    hudValues.engineered.hidden = !showEngineered;
+    if (showEngineered) {
+      hudValues.engineered.textContent = `engineered ${report.engineered} of ${report.organisms} · mean r ${report.engineeredMeanRadius.toFixed(1)}`;
     }
-    hud.textContent = lines.join('\n');
+    inspector.classList.toggle('is-empty', selectedLineage < 0);
     inspector.textContent = inspectorText(selected);
     runPanel.maybeAutosave(now);
   }
