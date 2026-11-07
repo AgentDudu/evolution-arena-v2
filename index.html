@@ -43,6 +43,9 @@
       /* one slider per row: the sim keys are long enough that a label needs the whole line */
       #sim-params { grid-template-columns: 1fr; }
       #sim-params input[type='range'] { flex: 1 1 auto; }
+      #run-link { flex: 1 1 100%; min-width: 0; font: 10px ui-monospace, Consolas, monospace; }
+      #run-name { flex: 1 1 5rem; min-width: 0; }
+      #run-slots { flex: 1 1 5rem; min-width: 0; }
       button, input[type='text'] {
         font: inherit; color: var(--fg); background: #1b2530; border: 1px solid var(--line);
         border-radius: 6px; padding: 4px 8px;
@@ -104,6 +107,21 @@
           <label><input id="sim-reseed" type="checkbox" /> reseed when empty</label>
         </div>
         <div class="k" id="sim-status">world size and population caps stay fixed per run</div>
+        <span class="k">run · save, share, replay</span>
+        <div class="row">
+          <button id="run-share" type="button">share link</button>
+          <button id="export-csv" type="button">csv</button>
+          <button id="export-json" type="button">json</button>
+        </div>
+        <div class="row"><input id="run-link" type="text" spellcheck="false" aria-label="share link for this run" /></div>
+        <div class="row">
+          <input id="run-name" type="text" placeholder="slot name" aria-label="slot name" />
+          <button id="run-save" type="button">save slot</button>
+          <select id="run-slots" aria-label="saved slots"></select>
+          <button id="run-load" type="button">load</button>
+          <button id="run-forget" type="button">forget</button>
+        </div>
+        <div class="k" id="run-status">reload brings the last run back</div>
       </div>
       <div id="inspector"><span class="k">shift+click an organism to inspect it</span></div>
       <label><input id="isolate" type="checkbox" /> isolate its lineage (i)</label>

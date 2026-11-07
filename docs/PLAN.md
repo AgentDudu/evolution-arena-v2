@@ -406,8 +406,8 @@ Each item is independently mergeable to `develop` and leaves the app running.
 | 7 | Save & share | autosave, named slots, seed+params+log replay, share link, CSV/JSON export | a share link reproduces the sender's `stateHash` at its tick count | M |
 | 8 | Hardening & polish | perf pass vs budgets, keyboard shortcuts, mobile/touch basics, README how-to-run, error boundary, `precommit-scan` hook | budgets in §10 met on a mid-range laptop; fresh clone runs with `pnpm i && pnpm dev` | M |
 
-Done so far: items 1-4, 4b, 5 (release tool and its delete / live-params / events remainder) and 6 are
-merged; the item's done-when is met and its evidence is below. Item 4 evidence — `test/predation.test.ts` holds the
+Done so far: items 1-4, 4b, 5 (release tool and its delete / live-params / events remainder), 6 and 7
+are merged; the item's done-when is met and its evidence is below. Item 4 evidence — `test/predation.test.ts` holds the
 rule (overlap + ratio + both size floors + one kill per hunter + energy cap) and shows two radius
 morphs separated by >= 4 units coexisting for over 5 sim-minutes; the HUD prints the class count.
 
@@ -463,6 +463,32 @@ count, the same population and the same `stateHash`; `world.events` keeps
 the check drives the real controls and gates on each: delete toggle -> pointerdown on a body (1018 ->
 1017), `foodPerTick` slider -> 25 in the live world, predation checkbox -> false, catastrophe
 1017 -> 478, food bloom +36 up to the 1500 cap, 6 perturbations logged.
+
+Item 7 (measured, `test/share.test.ts` + `test/metrics.test.ts`) — done-when met: **a share link
+reproduces the sender's `stateHash` at its tick count**, in headless tests and in Chrome. The run is
+rebuilt by re-simulation, not a state dump: the link carries the parameters the run *started* with
+(`shareLink` reads the params the page loaded or saved, because the world's current params have drifted
+by design), the ordered `events` log, the tick count and the organism/food counts, gzip + base64url
+(875 characters for 33 951 ticks). `replayRun` builds a world from that, applies `setParams` /
+`scatterFood` / `catastrophe` / `foodBloom` / `mutationBurst` / `releaseCluster` at their logged ticks —
+the same methods the live tools call, which is what keeps a logged run and a live run identical instead
+merely similar — and runs to the shared tick. Evidence: a scripted run with four live parameter edits,
+a bloom, a catastrophe, 6 500 ticks and three engineered releases round-trips to an identical
+`stateHash`; deleting any event breaks it, and a run with edited params does **not** reproduce when
+encoded with the world's current params, which is the failure mode the encode-the-start-params rule
+exists to prevent. Restoring also guards the other direction: `restoreRun` re-applies the recorded
+organism and food counts and only accepts the run when the rebuilt `stateHash` equals the sender's; the
+page shows the number, restores **paused** so it cannot drift while you read it, and refuses bad input,
+an out-of-range parameter and a run over `MAX_REPLAY_TICKS` (60 000) with separate messages.
+Autosave (5 s, its own key so it cannot overwrite a manual `save`) replays to its own hash. In the
+browser the check clicks `share`, navigates a fresh page to the produced link and gates on equality
+(33 951 ticks → 3 247 751 943 both sides, `pop 448`), then opens the bare URL and gates on the autosave
+restoring and matching its own hash. Two bugs this caught: `shareLink` was encoding the world's live
+(drifted) params, and the live paint/release tools called `placeFood`/`engineer` directly instead of the
+logged `scatterFood`/`releaseCluster`, so those actions never reached the event log — a shared run would
+have silently lost the user's own clicks. A second finding worth keeping: an autosave that restores
+silently is a surprise when the visitor asked for `?seed=x`, so autosave only takes over when the URL
+names neither a run nor a seed.
 
 Item 4b (measured, `scripts/foodweb.ts`) — item 4 only held for 5 sim-minutes. At a full sim hour the
 old default world was a giant monoculture: mean radius 15.4 against a ceiling of 16, dwarf class down
