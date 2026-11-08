@@ -55,6 +55,25 @@ export class Rng {
     return this.next() / 0x100000000;
   }
 
+  /** The four sfc32 words as uint32. A save that carries them restores a run that *continues* the same
+   *  way, not merely one that looks the same at the saved tick - without them the next 100 ticks would be
+   *  a different world even though the saved tick matches bit for bit. The step keeps these fields in a
+   *  mix of signed and unsigned form, but every read goes through `| 0` or `>>> 0`, so writing them back
+   *  as uint32 is the same stream mod 2^32 - which is what makes the words safe to put in JSON. */
+  stream(): number[] {
+    return [this.a >>> 0, this.b >>> 0, this.c >>> 0, this.d >>> 0];
+  }
+
+  restoreStream(words: readonly number[]): void {
+    if (words.length !== 4 || words.some((w) => !Number.isInteger(w) || w < 0 || w > 0xffffffff)) {
+      throw new Error('rng stream must be exactly four uint32 words');
+    }
+    this.a = words[0];
+    this.b = words[1];
+    this.c = words[2];
+    this.d = words[3];
+  }
+
   range(min: number, max: number): number {
     return min + (max - min) * this.float();
   }

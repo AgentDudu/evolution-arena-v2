@@ -13,7 +13,16 @@ const CANDIDATES = [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
 ];
 
-const url = process.argv[2] ?? 'http://localhost:4321/?seed=check';
+// new URL normalises the path: Edge reports the tab's url as "http://host:4321/", so a bare
+// "http://host:4321" from the command line would never match the tab the check opened, and the check would
+// spend ten seconds blaming the DevTools endpoint for a missing slash.
+let url: string;
+try {
+  url = new URL(process.argv[2] ?? 'http://localhost:4321/?seed=check').href;
+} catch {
+  console.error(`not a URL: ${String(process.argv[2])} — pass something like http://localhost:4321/?seed=check`);
+  process.exit(1);
+}
 const seconds = Number(process.argv[3] ?? 4);
 // Optional longer turbo soak: prints heap and buffer occupancy every 10 s, which is how the
 // "no heap growth" half of the graphs done-when gets measured in a real browser.
@@ -41,6 +50,10 @@ const browser = spawn(bin, [
 ]);
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+// A throw must not leave headless Edge alive: it keeps the debug port, and the next run then really does
+// fail to bring the endpoint up.
+process.on('exit', () => browser.kill());
 
 async function target(): Promise<{ webSocketDebuggerUrl: string }> {
   for (let attempt = 0; attempt < 40; attempt++) {
@@ -483,9 +496,24 @@ type Replay = {
   senderHash?: number;
   linkChars?: number;
   linkEvents?: number;
+  restoreMs?: number;
+  restoreFps?: number;
+  sawProgress?: boolean;
 };
 let replay: Replay = {};
 try {
+  // Build a few thousand ticks before sharing: a replay of a couple hundred ticks lands inside one poll,
+  // which leaves nothing to measure about watchability. Play first — a headless page can come up hidden
+  // and therefore paused, and a paused world builds nothing no matter how hard turbo is pressed.
+  await call('Runtime.evaluate', {
+    expression: `(() => {
+      const play = document.getElementById('playpause');
+      if (play && play.textContent === 'play') play.click();
+      document.getElementById('turbo')?.click();
+    })()`,
+    returnByValue: true,
+  });
+  await sleep(17000);
   const built = await call('Runtime.evaluate', {
     expression: `(() => {
       document.getElementById('run-share').click();
@@ -508,17 +536,27 @@ try {
   if (!sender.link) throw new Error('the share button produced no link');
   replay = { senderTick: sender.tick, senderHash: sender.hash, linkChars: sender.link.length, linkEvents: sender.events };
   await call('Page.enable');
+  // The share link is the one restore left that rebuilds a run tick by tick, so this is where the
+  // owner's symptom has to be caught: a reload that rebuilt the world in long CPU slices starved
+  // requestAnimationFrame, leaving a nearly empty arena at a few fps that then filled up frozen.
+  // Measure the frame rate while the replay is actually running, and require the arena overlay to say so.
+  const replayStartedAt = Date.now();
   await call('Page.navigate', { url: sender.link });
+  let replaySawProgress = false;
+  let replayProgressAt: { at: number; frames: number } | null = null;
   for (let attempt = 0; attempt < 240; attempt++) {
     await sleep(500);
     const now = await call('Runtime.evaluate', {
       expression: `(() => {
         const w = window.arena && window.arena.world();
+        const overlay = document.getElementById('hud-status');
         return JSON.stringify({
           status: document.getElementById('run-status') ? document.getElementById('run-status').textContent : '',
           paused: document.getElementById('playpause') ? document.getElementById('playpause').textContent : '',
           tick: w ? w.tick : -1,
           hash: w ? w.stateHash() : -1,
+          frames: window.arena && window.arena.frameCount ? window.arena.frameCount() : -1,
+          overlay: overlay && !overlay.hidden ? String(overlay.textContent ?? '') : '',
         });
       })()`,
       returnByValue: true,
@@ -528,9 +566,28 @@ try {
       paused?: string;
       tick?: number;
       hash?: number;
+      frames?: number;
+      overlay?: string;
     };
+    if (!replayProgressAt && (seen.overlay ?? '').includes('replaying')) {
+      replaySawProgress = true;
+      replayProgressAt = { at: Date.now(), frames: seen.frames ?? 0 };
+    }
     if ((seen.status ?? '').includes('loaded') || (seen.status ?? '').includes('refused')) {
-      replay = { ...replay, status: seen.status, paused: seen.paused, tick: seen.tick, hash: seen.hash };
+      const finishedAt = Date.now();
+      replay = {
+        ...replay,
+        status: seen.status,
+        paused: seen.paused,
+        tick: seen.tick,
+        hash: seen.hash,
+        restoreMs: finishedAt - replayStartedAt,
+        sawProgress: replaySawProgress,
+        restoreFps:
+          replayProgressAt && finishedAt > replayProgressAt.at
+            ? Math.round((((seen.frames ?? 0) - replayProgressAt.frames) / (finishedAt - replayProgressAt.at)) * 1000)
+            : undefined,
+      };
       break;
     }
   }
@@ -541,35 +598,55 @@ console.log('share replay:', JSON.stringify(replay));
 
 // Stage three: open the page with no seed and no link at all. That is the autosave path - the browser
 // profile still holds the last run, and the page is supposed to pick it up instead of starting fresh.
-let autosave: { status?: string; tick?: number; restoreFps?: number; restoreMs?: number; sawProgress?: boolean; error?: string } = {};
+let autosave: {
+  status?: string;
+  tick?: number;
+  restoreMs?: number;
+  format?: string;
+  payloadKb?: number;
+  savedTick?: number;
+  error?: string;
+} = {};
 if (!replay.error) {
   try {
-    const startedAt = Date.now();
     // The profile's autosave would otherwise hold a few hundred ticks, a restore that finishes before
     // the first poll: nothing to measure. Turbo the seeded run up to a few thousand ticks first —
     // that is the size a real tab reaches after a few minutes, and the size the owner saw.
-    await call('Page.navigate', { url });
+    await call('Page.navigate', { url: `${url.split('?')[0]}?seed=snapshot-check` });
     await sleep(1200);
     await call('Runtime.evaluate', { expression: `document.getElementById('turbo')?.click()` });
     await sleep(17000); // the autosave lands every 5 s, so this writes the long run at least three times
-    // the symptom this stage now guards: a reload rebuilt the saved run in 150 ms CPU slices, which
-    // starved requestAnimationFrame, so the arena sat nearly empty at a few fps and then filled up
-    // frozen. Measure the frame rate while the replay is actually running, and require the arena
-    // overlay to report progress.
-    let sawProgress = false;
-    let progressAt: { at: number; frames: number } | null = null;
+    // What did the page store? A snapshot (prefix EA2:) comes back in one parse; the old replay log had
+    // to be re-ticked, which is the path that left the owner with a blank arena at 7 fps. That path is
+    // still measured, but on the share link, where it is the only one left.
+    const storedRaw = await call('Runtime.evaluate', {
+      expression: `(() => {
+        const text = localStorage.getItem('arena.autosave.v1') ?? '';
+        const head = text.slice(0, 4);
+        let at = -1;
+        try {
+          if (head === 'EA2:') at = Number(JSON.parse(text.slice(4)).t);
+        } catch {}
+        return JSON.stringify({ head, kb: Math.round(text.length / 1024), at: at });
+      })()`,
+      returnByValue: true,
+    });
+    const stored = JSON.parse(String((storedRaw.result as { result?: { value?: string } } | undefined)?.result?.value ?? '{}')) as {
+      head?: string;
+      kb?: number;
+      at?: number;
+    };
+    autosave = { format: stored.head, payloadKb: stored.kb, savedTick: stored.at };
+    const startedAt = Date.now();
     await call('Page.navigate', { url: url.split('?')[0] });
     for (let attempt = 0; attempt < 120; attempt++) {
       await sleep(500);
       const now = await call('Runtime.evaluate', {
         expression: `(() => {
           const w = window.arena && window.arena.world();
-          const overlay = document.getElementById('hud-status');
           return JSON.stringify({
             status: document.getElementById('run-status') ? document.getElementById('run-status').textContent : '',
             tick: w ? w.tick : -1,
-            frames: window.arena && window.arena.frameCount ? window.arena.frameCount() : -1,
-            overlay: overlay && !overlay.hidden ? String(overlay.textContent ?? '') : '',
           });
         })()`,
         returnByValue: true,
@@ -577,25 +654,9 @@ if (!replay.error) {
       const seen = JSON.parse(String((now.result as { result?: { value?: string } } | undefined)?.result?.value ?? '{}')) as {
         status?: string;
         tick?: number;
-        frames?: number;
-        overlay?: string;
       };
-      if (!progressAt && (seen.overlay ?? '').includes('replaying')) {
-        sawProgress = true;
-        progressAt = { at: Date.now(), frames: seen.frames ?? 0 };
-      }
       if ((seen.status ?? '').includes('loaded') || (seen.status ?? '').includes('refused')) {
-        const finishedAt = Date.now();
-        autosave = {
-          status: seen.status,
-          tick: seen.tick,
-          restoreMs: finishedAt - startedAt,
-          sawProgress,
-          restoreFps:
-            progressAt && finishedAt > progressAt.at
-              ? Math.round((((seen.frames ?? 0) - progressAt.frames) / (finishedAt - progressAt.at)) * 1000)
-              : undefined,
-        };
+        autosave = { ...autosave, status: seen.status, tick: seen.tick, restoreMs: Date.now() - startedAt };
         break;
       }
     }
@@ -633,18 +694,26 @@ if (payload.error === undefined) {
     gates.push(`the share link rebuilt a different world: tick ${String(replay.tick)} hash ${String(replay.hash)} vs sender tick ${String(replay.senderTick)} hash ${String(replay.senderHash)}`);
   }
   if (!replay.error && replay.tick !== replay.senderTick) gates.push(`the share link landed on tick ${String(replay.tick)}, the sender was at ${String(replay.senderTick)}`);
-  if (!replay.error && (replay.linkEvents ?? 0) < 5) gates.push(`the share link carried only ${String(replay.linkEvents)} events`);
+  if (!replay.error && replay.restoreFps !== undefined && replay.restoreFps < 20) {
+    gates.push(`the page painted at ${String(replay.restoreFps)} fps while rebuilding the shared run (${String(replay.restoreMs)} ms) — it should stay watchable`);
+  }
+  if (!replay.error && (replay.restoreMs ?? 0) > 1200 && !replay.sawProgress) {
+    gates.push('rebuilding a share link took over a second without a progress readout over the arena (#hud-status)');
+  }
+  if (!replay.error && (replay.senderTick ?? 0) < 1000) {
+    gates.push(`the share replay stage only reached tick ${String(replay.senderTick)}, too short a run to tell whether a rebuild stays watchable`);
+  }
+  if (autosave.error) gates.push(`the autosave stage threw ${autosave.error}`);
+  if (!replay.error && autosave.format !== 'EA2:') gates.push(`autosave stored a "${String(autosave.format)}" payload, not a snapshot an opening page can read without replaying`);
+  if (!replay.error && (autosave.restoreMs ?? 0) > 1500) gates.push(`the autosaved run took ${String(autosave.restoreMs)} ms to open at tick ${String(autosave.savedTick)} — a snapshot should be back within one poll`);
+  if (!replay.error && autosave.savedTick !== undefined && autosave.tick !== autosave.savedTick) {
+    gates.push(`the autosave was written at tick ${String(autosave.savedTick)} but the page opened at tick ${String(autosave.tick)}`);
+  }
   if (!(replay.status ?? '').includes('matches the sender')) gates.push(`the page did not report a hash match (${String(replay.status)})`);
   if (!replay.error && replay.paused !== 'play') gates.push(`the restored run was left running (play button reads "${String(replay.paused)}"), so its state kept moving away from the shared one`);
   if (autosave.error) gates.push(`the autosave stage threw ${autosave.error}`);
   if (!replay.error && !(autosave.status ?? '').includes('autosave loaded')) gates.push(`opening the page with no seed and no link did not pick up the autosaved run (${String(autosave.status)})`);
-  if (autosave.restoreFps !== undefined && autosave.restoreFps < 20) {
-    gates.push(`the page painted at ${String(autosave.restoreFps)} fps while rebuilding the saved run (${String(autosave.restoreMs)} ms) — it should stay watchable`);
-  }
-  if ((autosave.restoreMs ?? 0) > 1200 && !autosave.sawProgress) {
-    gates.push('a restore longer than a second showed no progress readout over the arena (#hud-status)');
-  }
-  if (!replay.error && !(autosave.status ?? '').includes('matches the sender')) gates.push('the autosaved run did not replay to its own state hash');
+  if (!replay.error && !(autosave.status ?? '').includes('matches the sender')) gates.push('the autosaved run did not load back to its own state hash');
   if (!payload.inspector?.text?.includes('lineage')) gates.push('inspector produced no genome');
   if ((payload.layout?.overflowX ?? 0) > 1) gates.push(`the panel scrolls sideways by ${String(payload.layout?.overflowX)} px — content is wider than the column`);
   if (payload.layout && !payload.layout.inspectorPinned) gates.push('the inspector card is not pinned in view at the bottom of the panel');
