@@ -65,6 +65,8 @@ body { display: flex; }
 #hud .stat > b { font: 13px/1.15 var(--mono); font-variant-numeric: tabular-nums; color: var(--fg); }
 #hud .strip { grid-column: 1 / -1; font: 11px/1.35 var(--mono); color: var(--dim); }
 #hud .strip b { color: var(--fg); font-weight: 500; }
+/* the restore overlay gets the accent colour so it reads as an announcement, not another dim label */
+#hud .strip#hud-status { color: var(--accent); }
 
 #controls { bottom: 12px; left: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; max-width: calc(100% - 24px); }
 #controls .group { display: flex; gap: 6px; align-items: center; }

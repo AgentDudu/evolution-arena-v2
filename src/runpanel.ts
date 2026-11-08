@@ -19,6 +19,9 @@ export interface RunPanelHost {
   pause: () => void;
   /** Swap in a restored world. The caller resets the clock, buffers and selection around it. */
   setWorld: (world: World) => void;
+  /** Progress of the replay, shown over the arena. Null clears it. A replay of tens of thousands of
+   *  ticks takes tens of seconds, and the panel's own status line is not where the viewer is looking. */
+  progress: (text: string | null) => void;
 }
 
 const AUTOSAVE_KEY = 'arena.autosave.v1';
@@ -90,9 +93,16 @@ export function initRunPanel(host: RunPanelHost): { maybeAutosave: (now: number)
       return;
     }
     say(`${label}: replaying ${run.tick} ticks`);
+    // The world on screen is not the one being rebuilt, and ticking both splits one CPU between them,
+    // so the live sim stops for the duration and the arena overlay says why. Without this a reload
+    // looked like an empty arena at a few fps that suddenly filled up and froze (owner report).
+    host.pause();
+    host.progress(`${label}: replaying 0 of ${run.tick} ticks`);
     const it = replayRun(run);
     const pump = () => {
-      const until = performance.now() + 150;
+      // 40 ms per slice: replaying tens of thousands of ticks stays fast, and the frame loop keeps
+      // painting between slices (a 150 ms slice held the page under 10 fps).
+      const until = performance.now() + 40;
       let done = 0;
       let result = it.next();
       while (!result.done && performance.now() < until) {
@@ -101,7 +111,7 @@ export function initRunPanel(host: RunPanelHost): { maybeAutosave: (now: number)
       }
       if (result.done) {
         host.setWorld(result.value);
-        host.pause();
+        host.progress(`${label} loaded · paused · press play`);
         const matched = result.value.stateHash() === run.hash;
         say(
           `${label} loaded · tick ${run.tick} · pop ${result.value.report().organisms} · state hash ${
@@ -112,6 +122,7 @@ export function initRunPanel(host: RunPanelHost): { maybeAutosave: (now: number)
         return;
       }
       say(`${label}: replayed ${done} of ${run.tick} ticks`);
+      host.progress(`${label}: replaying ${done} of ${run.tick} ticks`);
       setTimeout(pump, 0);
     };
     pump();

@@ -26,6 +26,7 @@ const hudValues = {
   ms: hudCell('hud-ms'),
   genome: hudCell('hud-genome'),
   engineered: hudCell('hud-engineered'),
+  status: hudCell('hud-status'),
 };
 const inspector = document.getElementById('inspector') as HTMLElement;
 const isolateBox = document.getElementById('isolate') as HTMLInputElement;
@@ -316,6 +317,8 @@ function setPaused(value: boolean): void {
   paused = value;
   playPause.textContent = paused ? 'play' : 'pause';
   playPause.setAttribute('aria-pressed', String(!paused));
+  // a restored run announces itself in the HUD and stays up until the viewer takes it from there
+  if (!paused) hudValues.status.hidden = true;
 }
 
 function setTurbo(value: boolean): void {
@@ -427,6 +430,8 @@ const TURBO_TICK_MS = 12;
 const MAX_TICKS_PER_FRAME = 16;
 let lastHud = lastFrame;
 let frames = 0;
+// monotonic, for the headless check: a restore that starves this counter is the page freezing
+let paintedFrames = 0;
 let windowTicks = 0;
 let windowSimMs = 0;
 
@@ -454,6 +459,7 @@ function frame(now: number): void {
 
   draw(alpha, selected);
   frames++;
+  paintedFrames++;
 
   if (now - lastHud > 250) {
     const report = world.report();
@@ -507,6 +513,7 @@ requestAnimationFrame(frame);
     return withMemory.memory ? { usedJSHeapSize: withMemory.memory.usedJSHeapSize } : null;
   },
   uPlotCount: () => document.querySelectorAll('.u-wrap').length,
+  frameCount: () => paintedFrames,
   uPlotCanvases: () => document.querySelectorAll('.u-wrap canvas').length,
   // same code path a shift+click takes, so the headless check can select a known organism
   select: (index = 0) => selectAtWorld(world.x[index], world.y[index]),
@@ -538,5 +545,14 @@ const runPanel = initRunPanel({
     trailSlot = -1;
     seedInput.value = String(next.initialParams.seed);
     resize();
+  },
+  // a restore can take tens of seconds of replay, and the run panel's status line sits at the bottom
+  // of a column the viewer is not looking at: this puts the same words over the arena
+  progress: (text) => {
+    if (text === null) hudValues.status.hidden = true;
+    else {
+      hudValues.status.hidden = false;
+      hudValues.status.textContent = text;
+    }
   },
 });

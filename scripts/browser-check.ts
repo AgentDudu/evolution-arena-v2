@@ -385,11 +385,12 @@ await new Promise<void>((resolve, reject) => {
 });
 
 // A target appears in /json/list before its document has committed, so evaluating straight away can
-// land on the browser's blank start page (window.arena undefined, location about:blank).
+// land on the browser's blank start page. Note `window.arena` alone proves nothing: the canvas has
+// id="arena", so the browser exposes a stale element under that name long before main.ts has run.
 async function waitForApp(): Promise<boolean> {
   for (let attempt = 0; attempt < 40; attempt++) {
     const probe = await call('Runtime.evaluate', {
-      expression: 'String(!!(window.arena && document.getElementById("arena")))',
+      expression: 'String(!!(window.arena && typeof window.arena.world === "function" && window.arena.world()))',
       returnByValue: true,
     });
     if (String(probe.result?.result?.value) === 'true') return true;
@@ -540,18 +541,35 @@ console.log('share replay:', JSON.stringify(replay));
 
 // Stage three: open the page with no seed and no link at all. That is the autosave path - the browser
 // profile still holds the last run, and the page is supposed to pick it up instead of starting fresh.
-let autosave: { status?: string; tick?: number; error?: string } = {};
+let autosave: { status?: string; tick?: number; restoreFps?: number; restoreMs?: number; sawProgress?: boolean; error?: string } = {};
 if (!replay.error) {
   try {
+    const startedAt = Date.now();
+    // The profile's autosave would otherwise hold a few hundred ticks, a restore that finishes before
+    // the first poll: nothing to measure. Turbo the seeded run up to a few thousand ticks first —
+    // that is the size a real tab reaches after a few minutes, and the size the owner saw.
+    await call('Page.navigate', { url });
+    await sleep(1200);
+    await call('Runtime.evaluate', { expression: `document.getElementById('turbo')?.click()` });
+    await sleep(17000); // the autosave lands every 5 s, so this writes the long run at least three times
+    // the symptom this stage now guards: a reload rebuilt the saved run in 150 ms CPU slices, which
+    // starved requestAnimationFrame, so the arena sat nearly empty at a few fps and then filled up
+    // frozen. Measure the frame rate while the replay is actually running, and require the arena
+    // overlay to report progress.
+    let sawProgress = false;
+    let progressAt: { at: number; frames: number } | null = null;
     await call('Page.navigate', { url: url.split('?')[0] });
     for (let attempt = 0; attempt < 120; attempt++) {
       await sleep(500);
       const now = await call('Runtime.evaluate', {
         expression: `(() => {
           const w = window.arena && window.arena.world();
+          const overlay = document.getElementById('hud-status');
           return JSON.stringify({
             status: document.getElementById('run-status') ? document.getElementById('run-status').textContent : '',
             tick: w ? w.tick : -1,
+            frames: window.arena && window.arena.frameCount ? window.arena.frameCount() : -1,
+            overlay: overlay && !overlay.hidden ? String(overlay.textContent ?? '') : '',
           });
         })()`,
         returnByValue: true,
@@ -559,9 +577,25 @@ if (!replay.error) {
       const seen = JSON.parse(String((now.result as { result?: { value?: string } } | undefined)?.result?.value ?? '{}')) as {
         status?: string;
         tick?: number;
+        frames?: number;
+        overlay?: string;
       };
+      if (!progressAt && (seen.overlay ?? '').includes('replaying')) {
+        sawProgress = true;
+        progressAt = { at: Date.now(), frames: seen.frames ?? 0 };
+      }
       if ((seen.status ?? '').includes('loaded') || (seen.status ?? '').includes('refused')) {
-        autosave = { status: seen.status, tick: seen.tick };
+        const finishedAt = Date.now();
+        autosave = {
+          status: seen.status,
+          tick: seen.tick,
+          restoreMs: finishedAt - startedAt,
+          sawProgress,
+          restoreFps:
+            progressAt && finishedAt > progressAt.at
+              ? Math.round((((seen.frames ?? 0) - progressAt.frames) / (finishedAt - progressAt.at)) * 1000)
+              : undefined,
+        };
         break;
       }
     }
@@ -604,6 +638,12 @@ if (payload.error === undefined) {
   if (!replay.error && replay.paused !== 'play') gates.push(`the restored run was left running (play button reads "${String(replay.paused)}"), so its state kept moving away from the shared one`);
   if (autosave.error) gates.push(`the autosave stage threw ${autosave.error}`);
   if (!replay.error && !(autosave.status ?? '').includes('autosave loaded')) gates.push(`opening the page with no seed and no link did not pick up the autosaved run (${String(autosave.status)})`);
+  if (autosave.restoreFps !== undefined && autosave.restoreFps < 20) {
+    gates.push(`the page painted at ${String(autosave.restoreFps)} fps while rebuilding the saved run (${String(autosave.restoreMs)} ms) — it should stay watchable`);
+  }
+  if ((autosave.restoreMs ?? 0) > 1200 && !autosave.sawProgress) {
+    gates.push('a restore longer than a second showed no progress readout over the arena (#hud-status)');
+  }
   if (!replay.error && !(autosave.status ?? '').includes('matches the sender')) gates.push('the autosaved run did not replay to its own state hash');
   if (!payload.inspector?.text?.includes('lineage')) gates.push('inspector produced no genome');
   if ((payload.layout?.overflowX ?? 0) > 1) gates.push(`the panel scrolls sideways by ${String(payload.layout?.overflowX)} px — content is wider than the column`);

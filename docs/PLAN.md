@@ -334,7 +334,10 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
   canvas pixel size, and the fraction of canvas pixels that differ from the background (proof the
   frame is actually painted). It also drives the sandbox tools through real DOM paths (release,
   delete, param sliders, three events), replays a share link against the sender's own `stateHash`,
-  restores the autosave in a fresh context, and gates the panel layout: no sideways overflow inside the
+  restores the autosave in a fresh context (after turboing the run to a few thousand ticks so the
+  replay is long enough to measure: it gates on the overlay reporting progress and the page still
+  painting at >= 20 fps while the replay runs — the 150 ms slice version measured 7 fps and failed),
+  and gates the panel layout: no sideways overflow inside the
   column, the inspector pinned in view without scrolling, gene sliders filling the card, and text at
   luminance difference >= 0.22 against its own background in both themes.
 - `predation.test.ts` — the rule on a two-organism arena with food, movement and reproduction off:
