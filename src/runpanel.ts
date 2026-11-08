@@ -8,7 +8,8 @@
 
 import type { MetricsHistory } from './sim/history.ts';
 import { METRIC_COLUMNS } from './sim/history.ts';
-import { decodeRun, encodeRun, replayRun, shareLink, type RunState } from './sim/share.ts';
+import { decodeRun, replayRun, shareLink, type RunState } from './sim/share.ts';
+import { encodeSnapshot, SNAPSHOT_PREFIX, worldFromSnapshot } from './sim/snapshot.ts';
 import type { World } from './sim/world.ts';
 
 export interface RunPanelHost {
@@ -76,7 +77,8 @@ export function initRunPanel(host: RunPanelHost): { maybeAutosave: (now: number)
     try {
       localStorage.setItem(SLOTS_KEY, JSON.stringify(next));
     } catch {
-      say('browser storage refused the save');
+      // A full-arena snapshot is a few hundred KB, so this is a real outcome and not only private mode.
+      say('browser storage is full: forget a slot and try again');
     }
     refreshSlots();
   }
@@ -85,6 +87,20 @@ export function initRunPanel(host: RunPanelHost): { maybeAutosave: (now: number)
    *  keeps drawing the current world meanwhile; the swap happens when the last tick lands. */
   function restore(text: string | null, label: string): void {
     if (!text) return;
+    if (text.startsWith(SNAPSHOT_PREFIX)) {
+      // A snapshot carries the world itself, so there is nothing to rebuild tick by tick: the arena comes
+      // back in one parse. The decode already refused anything that does not hash to what was written.
+      host.pause();
+      try {
+        const { world } = worldFromSnapshot(text);
+        host.setWorld(world);
+        restoredFrom = label;
+        say(`${label} loaded · tick ${world.tick} · pop ${world.report().organisms} · state hash matches the sender · paused`);
+      } catch (error) {
+        say(`${label} refused: ${(error as Error).message}`);
+      }
+      return;
+    }
     let run: RunState;
     try {
       run = decodeRun(text);
@@ -153,7 +169,7 @@ export function initRunPanel(host: RunPanelHost): { maybeAutosave: (now: number)
     }
     try {
       const next = readSlots();
-      next[name] = encodeRun(host.getWorld());
+      next[name] = encodeSnapshot(host.getWorld());
       writeSlots(next);
       say(`saved "${name}" at tick ${host.getWorld().tick}`);
       if (nameBox) nameBox.value = '';
@@ -223,15 +239,20 @@ export function initRunPanel(host: RunPanelHost): { maybeAutosave: (now: number)
   jsonBtn?.addEventListener('click', () => exportSamples(host.metrics(), true));
 
   let lastAutosave = 0;
+  let autosaveBroken = '';
   function maybeAutosave(now: number): void {
-    if (now - lastAutosave < AUTOSAVE_MS) return;
+    if (autosaveBroken || now - lastAutosave < AUTOSAVE_MS) return;
     lastAutosave = now;
     const world = host.getWorld();
     if (world.tick === 0) return;
     try {
-      localStorage.setItem(AUTOSAVE_KEY, encodeRun(world));
+      // A snapshot, not a replay log: opening this save costs one parse instead of one tick per tick.
+      localStorage.setItem(AUTOSAVE_KEY, encodeSnapshot(world));
     } catch {
-      // storage full or private mode: the run keeps going, and the share link still works
+      // Full disk, private mode, or a big arena against the ~5 MB quota. Retrying every 5 s would spam the
+      // status line and buy nothing, so say it once and stop.
+      autosaveBroken = 'autosave paused: browser storage refused the write';
+      say(autosaveBroken);
     }
   }
 

@@ -20,8 +20,8 @@ and reopening the page picks up the last run. The performance pass (item 8) is w
 ```sh
 pnpm install
 pnpm dev                          # http://localhost:5173 — whole world fitted to the window
-pnpm test                         # everything: 104 tests, ~4 min (long arena runs dominate)
-pnpm test:quick                   # same suite minus *.long.test.ts: 81 tests, ~5 s — the edit loop
+pnpm test                         # everything: 127 tests, ~4 min (long arena runs dominate)
+pnpm test:quick                   # same suite minus *.long.test.ts: 104 tests, ~15 s — the edit loop
 pnpm typecheck
 node scripts/headless.ts 36000    # [ticks] [seed] [json params] -> report + species + state hash
 node --expose-gc scripts/headless.ts 216000 arena-1   # a sim-hour soak: buffers + collected heap
@@ -68,10 +68,17 @@ the run stays reproducible from (seed, params, ticks, events) — that list is w
 The determinism is measured, not asserted: two identically seeded worlds that both hit
 `catastrophe(0.5)` at tick 600 ended with the same kill count and the same `stateHash`.
 
-**Save, share, replay.** The panel's `save` button writes a snapshot (params + organism + food counts +
-event log) to `arena.save.v1`, and every five seconds the live world goes to `arena.autosave.v1` —
-separate keys, because the autosave overwrites constantly and a save you meant to keep should not die
-with it. `share` (or `s`) builds a link like `…/?run=1H4sIA…`: gzip + base64url, 875 characters for a
+**Save, share, replay.** Two formats, because they answer different questions. A `save` (named slots) and
+the autosave that fires every five seconds store the **world itself**: organism and food arrays as base64
+typed arrays plus params, event log and counters, prefixed `EA2:`, into `arena.slots.v1` / `arena.autosave.v1`.
+Opening one costs one parse, not one tick per tick — measured: tick 3 622 (pop 1 278, 238 KB) back on screen
+in 0.54 s, where the replay path needed 28 s for a run of the same size. A snapshot also carries the four
+words of the sim's PRNG and the food pacing accumulator, so the run *continues* identically rather than merely
+looking right at the saved tick — `test/snapshot.test.ts` steps both worlds 300 further ticks and requires the
+hashes to still agree. It is refused unless the world it rebuilds hashes to what was written, so a truncated or
+edited save says so instead of loading a subtly different run. They live in localStorage only: 240–300 KB for a
+full arena, so the ~5 MB quota is roughly ten named slots, and a write the browser refuses is said once and then
+stopped rather than retried every 5 s. `share` (or `s`) builds a link like `…/?run=1H4sIA…`: gzip + base64url, 875 characters for a
 33 951-tick run. Opening it **re-simulates** rather than restoring a state dump: the page seeds a world
 from the link's own parameters, applies the event log at its recorded ticks, and runs to the shared
 tick. That is the only representation that stays honest — a snapshot of the current world cannot tell a
@@ -83,14 +90,17 @@ it **paused** at the shared tick so it does not drift while you read the number.
 round-trip is refused instead of half-loaded: a bad or truncated link, an out-of-range parameter, and a
 run too long to replay (over 60 000 ticks) each get their own message. A plain reload picks up the
 autosave — but an explicit `?seed=` does not, because asking for a seed means asking for that seed's
-fresh world. Rebuilding a long run means ticking it again, so during a restore the arena shows
-`autosave: replaying N of M ticks` over the world, the live sim is parked for the duration (two runs on
-one CPU only split it), and the replay is fed in 40 ms slices so the page keeps painting — measured 25 fps
-while a 3 768-tick run rebuilt itself in 28 s, against 7 fps when the slice was 150 ms. The proof runs in two places: headless, where a scripted run (four live edits, a
+fresh world. A saved slot written in the old replay format still opens: the page reads the prefix and falls
+back to replaying. Only a share link rebuilds by ticking, so that is where the page has to stay watchable:
+during a link restore the arena shows `share link: replaying N of M ticks` over the world, the live sim is
+parked for the duration (two runs on one CPU only split it), and the replay is fed in 40 ms slices so the page
+keeps painting — measured 23 fps while a 7 995-tick run rebuilt itself in 19.9 s. A 150 ms slice, the size that
+caused the owner's blank-arena-at-7-fps report, paints at 7 fps and fails the gate. The proof runs in two places: headless, where a scripted run (four live edits, a
 bloom, a catastrophe, 6 500 ticks, three releases of engineered organisms) comes back with an identical
 `stateHash`, and in Chrome, where the browser check clicks `share`, opens the link in a page that never
-saw the run, and requires `stateHash` equality at the shared tick (33 951 ticks: 3 247 751 943 both
-sides) plus an autosave that restores to its own hash.
+saw the run, and requires `stateHash` equality at the shared tick (7 995 ticks: 953 461 388 both sides) while
+measuring the frame rate of the rebuild; then it reopens the page with no seed and no link and requires the
+autosave to be an `EA2:` snapshot that lands on the tick it was written at (3 622) inside one 500 ms poll.
 
 Food comes in two classes: small green particles (radius 3, 25 energy) that any organism can handle,
 and large yellow-green ones (radius 8, 60 energy) that only an organism of radius ~14.5 or more can

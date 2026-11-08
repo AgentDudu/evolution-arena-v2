@@ -13,6 +13,7 @@ import {
 import { UniformGrid } from '../core/grid.ts';
 import { Rng, type Seed } from '../core/rng.ts';
 import { bounce, clamp, dist2, wrap } from '../core/space.ts';
+import type { SnapshotArray, SnapshotState } from './snapshot.ts';
 
 export interface GeneMeans {
   radius: number;
@@ -739,6 +740,81 @@ export class World {
   }
 
   /** FNV-1a over the canonical numeric state. Same seed + params + ticks => same hash. */
+  /** Everything a snapshot needs to bring this exact run back: the live array prefixes, the counters the
+   *  state hash reads, the food pacing accumulator, and the RNG stream words. Transient per-tick state —
+   *  acceleration, prevX/prevY, kill flags, the spatial grids — is left out on purpose: `step()` rewrites
+   *  all of it before anything reads it, so saving it would add bytes and one more way to be inconsistent. */
+  saveState(): SnapshotState {
+    const org: Record<string, SnapshotArray> = {
+      x: this.x.subarray(0, this.alive),
+      y: this.y.subarray(0, this.alive),
+      vx: this.vx.subarray(0, this.alive),
+      vy: this.vy.subarray(0, this.alive),
+      energy: this.energy.subarray(0, this.alive),
+      age: this.age.subarray(0, this.alive),
+      gen: this.gen.subarray(0, this.alive),
+      lineage: this.lineage.subarray(0, this.alive),
+      origin: this.origin.subarray(0, this.alive),
+    };
+    for (const k of GENE_KEYS) org[`g_${k}`] = this.gene[k].subarray(0, this.alive);
+    return {
+      tick: this.tick,
+      seed: this.initialSeed,
+      start: this.initialParams,
+      params: { ...this.params },
+      events: [...this.events],
+      alive: this.alive,
+      food: this.foodCount,
+      nextLineage: this.nextLineage,
+      foodAcc: this.foodAcc,
+      rng: this.rng.stream(),
+      org,
+      foodArrays: {
+        fx: this.fx.subarray(0, this.foodCount),
+        fy: this.fy.subarray(0, this.foodCount),
+        fr: this.fr.subarray(0, this.foodCount),
+        fe: this.fe.subarray(0, this.foodCount),
+      },
+    };
+  }
+
+  /** Adopt a decoded snapshot as this world's state. The world was built with the snapshot's starting
+   *  params, so the array capacities match. The live params and the event log come along too: a restored
+   *  run still has to produce a share link that replays to the same place. */
+  adoptState(s: SnapshotState): void {
+    const orgTargets: Record<string, SnapshotArray> = {
+      x: this.x, y: this.y, vx: this.vx, vy: this.vy, energy: this.energy, age: this.age, gen: this.gen,
+      lineage: this.lineage, origin: this.origin,
+    };
+    for (const k of GENE_KEYS) orgTargets[`g_${k}`] = this.gene[k];
+    for (const [key, src] of Object.entries(s.org)) {
+      const target = orgTargets[key];
+      if (target === undefined) throw new Error(`snapshot carries an unknown organism array "${key}"`);
+      if (target.constructor !== src.constructor) throw new Error(`snapshot array "${key}" has the wrong element type`);
+      // RangeError if the save claims more slots than this world was built for - the caller reports it.
+      target.set(src);
+    }
+    const foodTargets: Record<string, Float64Array> = { fx: this.fx, fy: this.fy, fr: this.fr, fe: this.fe };
+    for (const [key, src] of Object.entries(s.foodArrays)) {
+      const target = foodTargets[key];
+      if (target === undefined) throw new Error(`snapshot carries an unknown food array "${key}"`);
+      target.set(src);
+    }
+    this.tick = s.tick;
+    this.alive = s.alive;
+    this.foodCount = s.food;
+    this.nextLineage = s.nextLineage;
+    this.foodAcc = s.foodAcc;
+    this.rng.restoreStream(s.rng);
+    // Render interpolation reads prevX/prevY; without this baseline the first frame after a load lerps
+    // every organism from 0,0.
+    this.prevX.set(this.x.subarray(0, this.alive));
+    this.prevY.set(this.y.subarray(0, this.alive));
+    this.setParams(s.params);
+    this.events.length = 0;
+    this.events.push(...s.events);
+  }
+
   stateHash(): number {
     let h = 0x811c9dc5;
     const push = (value: number): void => {

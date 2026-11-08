@@ -232,9 +232,13 @@ full so memory stays flat.
 
 ## 9. Persistence, sharing, privacy
 
-- `localStorage` under `ea:autosave:v1` (every ~5 s) plus named slots `ea:slot:<name>`.
-  Contents: seed, params, edit log, tick count, metric series. Not the raw world — the world is
-  recomputed by replaying ticks, which keeps a save a few KB instead of MB.
+- `localStorage` under `arena.autosave.v1` (every ~5 s) plus named slots in `arena.slots.v1`.
+  Contents: the live world — organism and food arrays as base64 typed arrays — plus params, the event log,
+  counters and the PRNG words, under an `EA2:` prefix. The plan said "not the raw world"; that turned out to
+  be the wrong trade for a save the user opens locally, because re-ticking a long run costs the user minutes
+  (measured 28 s for ~3 800 ticks, and a 150 ms slice budget took the page to 7 fps while it happened). The
+  raw world costs 240–300 KB and opens in about half a second. The replay representation stays where it is
+  needed: share links, which have to fit in a URL and stay checkable by a reader.
 - Share link: `?run=<base64 of seed + the params the run *started* with + the edit log>`. Opening it
   replays to the sender's tick count and the panel states both counts and whether the **stateHash
   matches the sender** — equal hashes mean the link was interpreted correctly, not approximated. The
@@ -333,10 +337,11 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
   CDP: asserts no page exception, reports real-time ticks/s, turbo ticks/s, population/food/generation,
   canvas pixel size, and the fraction of canvas pixels that differ from the background (proof the
   frame is actually painted). It also drives the sandbox tools through real DOM paths (release,
-  delete, param sliders, three events), replays a share link against the sender's own `stateHash`,
-  restores the autosave in a fresh context (after turboing the run to a few thousand ticks so the
-  replay is long enough to measure: it gates on the overlay reporting progress and the page still
-  painting at >= 20 fps while the replay runs — the 150 ms slice version measured 7 fps and failed),
+  delete, param sliders, three events), replays a share link against the sender's own `stateHash` while
+  measuring the rebuild (turboes the run first so the replay is long enough to measure — 7 995 ticks in
+  19.9 s, gated on the overlay reporting progress and the page still painting at >= 20 fps: the 150 ms slice
+  version measured 7 fps and failed), then opens the bare URL and gates on the autosave being an `EA2:`
+  snapshot that lands on the tick it was written to (3 622) inside one 500 ms poll,
   and gates the panel layout: no sideways overflow inside the
   column, the inspector pinned in view without scrolling, gene sliders filling the card, and text at
   luminance difference >= 0.22 against its own background in both themes.
@@ -508,13 +513,31 @@ page shows the number, restores **paused** so it cannot drift while you read it,
 an out-of-range parameter and a run over `MAX_REPLAY_TICKS` (60 000) with separate messages.
 Autosave (5 s, its own key so it cannot overwrite a manual `save`) replays to its own hash. In the
 browser the check clicks `share`, navigates a fresh page to the produced link and gates on equality
-(33 951 ticks → 3 247 751 943 both sides, `pop 448`), then opens the bare URL and gates on the autosave
-restoring and matching its own hash. Two bugs this caught: `shareLink` was encoding the world's live
+(7 995 ticks → 953 461 388 both sides, `pop 1 312`, rebuilt in 19.9 s at 23 fps with the progress readout
+visible), then opens the bare URL and gates on the autosave restoring and matching its own hash.
+Two bugs this caught: `shareLink` was encoding the world's live
 (drifted) params, and the live paint/release tools called `placeFood`/`engineer` directly instead of the
 logged `scatterFood`/`releaseCluster`, so those actions never reached the event log — a shared run would
 have silently lost the user's own clicks. A second finding worth keeping: an autosave that restores
 silently is a surprise when the visitor asked for `?seed=x`, so autosave only takes over when the URL
 names neither a run nor a seed.
+
+Item 7b (measured, `test/snapshot.test.ts`) — the local half of persistence stopped replaying. Autosave and
+named slots now store the world (`EA2:` + base64 typed arrays) instead of a replay log, because a save the user
+opens on their own machine should come back now, not in minutes. `World.saveState`/`adoptState` own the format's
+state: the live array prefixes, the counters the `stateHash` reads, `foodAcc`, `nextLineage`, the four sfc32 words
+and the live params + event log (so a restored run can still produce a share link). Transient per-tick state —
+acceleration, `prevX/prevY`, kill flags, the spatial grids — is deliberately not saved: `step()` rewrites all of
+it before anything reads it. Evidence beyond "same tick, same population, same hash": **stepping the original and
+the restored world 300 further ticks leaves the two hashes equal**, which is the only test that would notice a
+reset PRNG, a lost `foodAcc` or a reset lineage counter; and `origin` plus the large-food class (`fr`/`fe`) survive
+even though `stateHash` never looks at them. Refusals are gated too: foreign version, truncated payload, organism
+or food counts that do not fit the params, an unknown array name, and one edited coordinate all say why. Measured
+in Chrome: payload 238 KB at tick 3 622 (pop 1 278) opened in 0.54 s at exactly the saved tick, where the replay
+path needed 28 s for a run of that size. The first round of tests failed for a real reason worth recording: `Rng`
+keeps `a/b/c/d` in a mix of signed and unsigned form (`(x+1)|0`), so the uint32 validation rejected a legitimate
+save — normalising the words on both sides is safe because every read in `next()` passes through `| 0` or `>>> 0`,
+and the 300-tick continuation test is what proves it.
 
 Item 4b (measured, `scripts/foodweb.ts`) — item 4 only held for 5 sim-minutes. At a full sim hour the
 old default world was a giant monoculture: mean radius 15.4 against a ceiling of 16, dwarf class down
