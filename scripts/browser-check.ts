@@ -499,6 +499,9 @@ type Replay = {
   restoreMs?: number;
   restoreFps?: number;
   sawProgress?: boolean;
+  senderSamples?: number;
+  charts?: number;
+  chartLastTick?: number;
 };
 let replay: Replay = {};
 try {
@@ -523,6 +526,7 @@ try {
         tick: w.tick,
         hash: w.stateHash(),
         events: w.events.length,
+        samples: window.arena.metrics().length,
       });
     })()`,
     returnByValue: true,
@@ -532,9 +536,10 @@ try {
     tick?: number;
     hash?: number;
     events?: number;
+    samples?: number;
   };
   if (!sender.link) throw new Error('the share button produced no link');
-  replay = { senderTick: sender.tick, senderHash: sender.hash, linkChars: sender.link.length, linkEvents: sender.events };
+  replay = { senderTick: sender.tick, senderHash: sender.hash, linkChars: sender.link.length, linkEvents: sender.events, senderSamples: sender.samples };
   await call('Page.enable');
   // The share link is the one restore left that rebuilds a run tick by tick, so this is where the
   // owner's symptom has to be caught: a reload that rebuilt the world in long CPU slices starved
@@ -550,6 +555,7 @@ try {
       expression: `(() => {
         const w = window.arena && window.arena.world();
         const overlay = document.getElementById('hud-status');
+        const m = window.arena && window.arena.metrics ? window.arena.metrics() : null;
         return JSON.stringify({
           status: document.getElementById('run-status') ? document.getElementById('run-status').textContent : '',
           paused: document.getElementById('playpause') ? document.getElementById('playpause').textContent : '',
@@ -557,6 +563,8 @@ try {
           hash: w ? w.stateHash() : -1,
           frames: window.arena && window.arena.frameCount ? window.arena.frameCount() : -1,
           overlay: overlay && !overlay.hidden ? String(overlay.textContent ?? '') : '',
+          charts: m ? m.length : -1,
+          chartLastTick: m && m.length > 0 ? m.tick[m.length - 1] : -1,
         });
       })()`,
       returnByValue: true,
@@ -568,6 +576,8 @@ try {
       hash?: number;
       frames?: number;
       overlay?: string;
+      charts?: number;
+      chartLastTick?: number;
     };
     if (!replayProgressAt && (seen.overlay ?? '').includes('replaying')) {
       replaySawProgress = true;
@@ -581,6 +591,8 @@ try {
         paused: seen.paused,
         tick: seen.tick,
         hash: seen.hash,
+        charts: seen.charts,
+        chartLastTick: seen.chartLastTick,
         restoreMs: finishedAt - replayStartedAt,
         sawProgress: replaySawProgress,
         restoreFps:
@@ -605,6 +617,9 @@ let autosave: {
   format?: string;
   payloadKb?: number;
   savedTick?: number;
+  senderCharts?: number;
+  charts?: number;
+  chartLastTick?: number;
   error?: string;
 } = {};
 if (!replay.error) {
@@ -624,10 +639,13 @@ if (!replay.error) {
         const text = localStorage.getItem('arena.autosave.v1') ?? '';
         const head = text.slice(0, 4);
         let at = -1;
+        let hist = -1;
         try {
-          if (head === 'EA2:') at = Number(JSON.parse(text.slice(4)).t);
+          const wire = JSON.parse(text.slice(4));
+          at = Number(wire.t);
+          hist = Number(wire.hist ? wire.hist.length : 0);
         } catch {}
-        return JSON.stringify({ head, kb: Math.round(text.length / 1024), at: at });
+        return JSON.stringify({ head, kb: Math.round(text.length / 1024), at: at, hist: hist });
       })()`,
       returnByValue: true,
     });
@@ -635,8 +653,9 @@ if (!replay.error) {
       head?: string;
       kb?: number;
       at?: number;
+      hist?: number;
     };
-    autosave = { format: stored.head, payloadKb: stored.kb, savedTick: stored.at };
+    autosave = { format: stored.head, payloadKb: stored.kb, savedTick: stored.at, senderCharts: stored.hist };
     const startedAt = Date.now();
     await call('Page.navigate', { url: url.split('?')[0] });
     for (let attempt = 0; attempt < 120; attempt++) {
@@ -644,9 +663,12 @@ if (!replay.error) {
       const now = await call('Runtime.evaluate', {
         expression: `(() => {
           const w = window.arena && window.arena.world();
+          const m = window.arena && window.arena.metrics ? window.arena.metrics() : null;
           return JSON.stringify({
             status: document.getElementById('run-status') ? document.getElementById('run-status').textContent : '',
             tick: w ? w.tick : -1,
+            charts: m ? m.length : -1,
+            chartLastTick: m && m.length > 0 ? m.tick[m.length - 1] : -1,
           });
         })()`,
         returnByValue: true,
@@ -654,9 +676,11 @@ if (!replay.error) {
       const seen = JSON.parse(String((now.result as { result?: { value?: string } } | undefined)?.result?.value ?? '{}')) as {
         status?: string;
         tick?: number;
+        charts?: number;
+        chartLastTick?: number;
       };
       if ((seen.status ?? '').includes('loaded') || (seen.status ?? '').includes('refused')) {
-        autosave = { ...autosave, status: seen.status, tick: seen.tick, restoreMs: Date.now() - startedAt };
+        autosave = { ...autosave, status: seen.status, tick: seen.tick, charts: seen.charts, chartLastTick: seen.chartLastTick, restoreMs: Date.now() - startedAt };
         break;
       }
     }
@@ -703,9 +727,19 @@ if (payload.error === undefined) {
   if (!replay.error && (replay.senderTick ?? 0) < 1000) {
     gates.push(`the share replay stage only reached tick ${String(replay.senderTick)}, too short a run to tell whether a rebuild stays watchable`);
   }
+  if (!replay.error && (replay.charts ?? 0) <= 0) {
+    gates.push('the rebuilt share run came back with empty charts — a run that is being re-simulated has no excuse for losing its own metric series');
+  }
+  if (!replay.error && (replay.chartLastTick ?? -1) < (replay.tick ?? 0) - 60) {
+    gates.push(`the rebuilt run's charts stop at tick ${String(replay.chartLastTick)} while the run itself is at ${String(replay.tick)}`);
+  }
   if (autosave.error) gates.push(`the autosave stage threw ${autosave.error}`);
   if (!replay.error && autosave.format !== 'EA2:') gates.push(`autosave stored a "${String(autosave.format)}" payload, not a snapshot an opening page can read without replaying`);
   if (!replay.error && (autosave.restoreMs ?? 0) > 1500) gates.push(`the autosaved run took ${String(autosave.restoreMs)} ms to open at tick ${String(autosave.savedTick)} — a snapshot should be back within one poll`);
+  if (!replay.error && (autosave.senderCharts ?? 0) <= 0) gates.push('the autosave stored no graph samples, so nothing here proves a restore brings the charts back');
+  if (!replay.error && autosave.charts !== autosave.senderCharts) {
+    gates.push(`the reopened page shows ${String(autosave.charts)} graph samples but the saved run had ${String(autosave.senderCharts)} — a restore redrawing the charts from empty is a restore that lost the run's record`);
+  }
   if (!replay.error && autosave.savedTick !== undefined && autosave.tick !== autosave.savedTick) {
     gates.push(`the autosave was written at tick ${String(autosave.savedTick)} but the page opened at tick ${String(autosave.tick)}`);
   }

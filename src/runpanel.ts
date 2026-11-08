@@ -7,7 +7,7 @@
 // the whole claim - a link that silently replayed a different world would be worse than no link.
 
 import type { MetricsHistory } from './sim/history.ts';
-import { METRIC_COLUMNS } from './sim/history.ts';
+import { METRIC_COLUMNS, MetricsHistory as History } from './sim/history.ts';
 import { decodeRun, replayRun, shareLink, type RunState } from './sim/share.ts';
 import { encodeSnapshot, SNAPSHOT_PREFIX, worldFromSnapshot } from './sim/snapshot.ts';
 import type { World } from './sim/world.ts';
@@ -19,7 +19,7 @@ export interface RunPanelHost {
    *  sender shared instead of whatever the sim did in the second it took to read it. */
   pause: () => void;
   /** Swap in a restored world. The caller resets the clock, buffers and selection around it. */
-  setWorld: (world: World) => void;
+  setWorld: (world: World, series?: MetricsHistory) => void;
   /** Progress of the replay, shown over the arena. Null clears it. A replay of tens of thousands of
    *  ticks takes tens of seconds, and the panel's own status line is not where the viewer is looking. */
   progress: (text: string | null) => void;
@@ -92,8 +92,12 @@ export function initRunPanel(host: RunPanelHost): { maybeAutosave: (now: number)
       // back in one parse. The decode already refused anything that does not hash to what was written.
       host.pause();
       try {
-        const { world } = worldFromSnapshot(text);
-        host.setWorld(world);
+        const { world, history } = worldFromSnapshot(text);
+        // The graphs come back with the world. A save whose series do not fit this build's buffers is
+        // refused like any other malformed part of it, rather than loaded with half its record missing.
+        const series = new History();
+        if (history !== undefined) series.adoptState(history);
+        host.setWorld(world, series);
         restoredFrom = label;
         say(`${label} loaded · tick ${world.tick} · pop ${world.report().organisms} · state hash matches the sender · paused`);
       } catch (error) {
@@ -114,7 +118,8 @@ export function initRunPanel(host: RunPanelHost): { maybeAutosave: (now: number)
     // looked like an empty arena at a few fps that suddenly filled up and froze (owner report).
     host.pause();
     host.progress(`${label}: replaying 0 of ${run.tick} ticks`);
-    const it = replayRun(run);
+    const series = new History();
+    const it = replayRun(run, series);
     const pump = () => {
       // 40 ms per slice: replaying tens of thousands of ticks stays fast, and the frame loop keeps
       // painting between slices (a 150 ms slice held the page under 10 fps).
@@ -126,7 +131,7 @@ export function initRunPanel(host: RunPanelHost): { maybeAutosave: (now: number)
         result = it.next();
       }
       if (result.done) {
-        host.setWorld(result.value);
+        host.setWorld(result.value, series);
         host.progress(`${label} loaded · paused · press play`);
         const matched = result.value.stateHash() === run.hash;
         say(
@@ -169,7 +174,7 @@ export function initRunPanel(host: RunPanelHost): { maybeAutosave: (now: number)
     }
     try {
       const next = readSlots();
-      next[name] = encodeSnapshot(host.getWorld());
+      next[name] = encodeSnapshot(host.getWorld(), host.metrics());
       writeSlots(next);
       say(`saved "${name}" at tick ${host.getWorld().tick}`);
       if (nameBox) nameBox.value = '';
@@ -247,7 +252,7 @@ export function initRunPanel(host: RunPanelHost): { maybeAutosave: (now: number)
     if (world.tick === 0) return;
     try {
       // A snapshot, not a replay log: opening this save costs one parse instead of one tick per tick.
-      localStorage.setItem(AUTOSAVE_KEY, encodeSnapshot(world));
+      localStorage.setItem(AUTOSAVE_KEY, encodeSnapshot(world, host.metrics()));
     } catch {
       // Full disk, private mode, or a big arena against the ~5 MB quota. Retrying every 5 s would spam the
       // status line and buy nothing, so say it once and stop.

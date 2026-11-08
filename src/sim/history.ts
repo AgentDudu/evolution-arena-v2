@@ -19,6 +19,15 @@ export const METRIC_COLUMNS = [
 
 export type MetricColumn = (typeof METRIC_COLUMNS)[number];
 
+/** What a saved run's graphs look like: the used prefix of every column, plus the stride that
+ *  produced it. Kept as Float64 so a restore is byte-exact rather than approximately right. */
+export interface HistoryState {
+  stride: number;
+  length: number;
+  tick: Float64Array;
+  series: Record<MetricColumn, Float64Array>;
+}
+
 export class MetricsHistory {
   readonly capacity: number;
   /** Ticks between samples. Doubles each time the buffer fills, so coverage grows with the run. */
@@ -87,6 +96,45 @@ export class MetricsHistory {
     this.length = 0;
     this.lastTick = -Infinity;
     this.stride = this.initialStride;
+  }
+
+  /** The sampled prefix only — capacity is fixed, so saving it whole would write up to 90 KB of
+   *  zeros for a run that filled the buffer once. */
+  saveState(): HistoryState {
+    return {
+      stride: this.stride,
+      length: this.length,
+      tick: this.tick.slice(0, this.length),
+      series: Object.fromEntries(METRIC_COLUMNS.map((name) => [name, this.series[name].slice(0, this.length)])) as Record<
+        MetricColumn,
+        Float64Array
+      >,
+    };
+  }
+
+  /** Backfill the buffers so a restored run keeps its graphs instead of redrawing them from empty. */
+  adoptState(state: HistoryState): void {
+    if (!(state.length >= 0) || state.length > this.capacity) {
+      throw new Error(`history length ${String(state.length)} does not fit a capacity of ${String(this.capacity)}`);
+    }
+    if (!(Number.isInteger(state.stride)) || state.stride < 1) {
+      throw new Error(`history stride ${String(state.stride)} must be an integer >= 1`);
+    }
+    for (const name of METRIC_COLUMNS) {
+      const column = state.series[name];
+      if (!(column instanceof Float64Array) || column.length !== state.length) {
+        throw new Error(`history column ${name} holds ${String(column?.length)}, expected ${String(state.length)}`);
+      }
+    }
+    if (!(state.tick instanceof Float64Array) || state.tick.length !== state.length) {
+      throw new Error(`history tick column holds ${String(state.tick?.length)}, expected ${String(state.length)}`);
+    }
+    this.reset();
+    this.length = state.length;
+    this.stride = state.stride;
+    this.tick.set(state.tick);
+    for (const name of METRIC_COLUMNS) this.series[name].set(state.series[name]);
+    this.lastTick = state.length > 0 ? state.tick[state.length - 1] : -Infinity;
   }
 
   /**

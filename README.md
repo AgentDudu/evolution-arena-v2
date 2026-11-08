@@ -20,8 +20,8 @@ and reopening the page picks up the last run. The performance pass (item 8) is w
 ```sh
 pnpm install
 pnpm dev                          # http://localhost:5173 — whole world fitted to the window
-pnpm test                         # everything: 127 tests, ~4 min (long arena runs dominate)
-pnpm test:quick                   # same suite minus *.long.test.ts: 104 tests, ~15 s — the edit loop
+pnpm test                         # everything: 131 tests, ~4 min (long arena runs dominate)
+pnpm test:quick                   # same suite minus *.long.test.ts: 108 tests, ~15 s — the edit loop
 pnpm typecheck
 node scripts/headless.ts 36000    # [ticks] [seed] [json params] -> report + species + state hash
 node --expose-gc scripts/headless.ts 216000 arena-1   # a sim-hour soak: buffers + collected heap
@@ -75,9 +75,12 @@ Opening one costs one parse, not one tick per tick — measured: tick 3 622 (pop
 in 0.54 s, where the replay path needed 28 s for a run of the same size. A snapshot also carries the four
 words of the sim's PRNG and the food pacing accumulator, so the run *continues* identically rather than merely
 looking right at the saved tick — `test/snapshot.test.ts` steps both worlds 300 further ticks and requires the
-hashes to still agree. It is refused unless the world it rebuilds hashes to what was written, so a truncated or
-edited save says so instead of loading a subtly different run. They live in localStorage only: 240–300 KB for a
-full arena, so the ~5 MB quota is roughly ten named slots, and a write the browser refuses is said once and then
+hashes to still agree. The **graphs travel with the save too**: the sampled metric series ride in the same payload
+(88 bytes per sample, up to ~120 KB at the buffer's 1 024-sample capacity), so reopening a run shows the curves you
+were looking at rather than an empty chart filling in from the restore tick. A save is refused unless the world it
+rebuilds hashes to what was written, so a truncated or
+edited save says so instead of loading a subtly different run. They live in localStorage only: 250–360 KB for a
+full arena, and a write the browser refuses is said once and then
 stopped rather than retried every 5 s. `share` (or `s`) builds a link like `…/?run=1H4sIA…`: gzip + base64url, 875 characters for a
 33 951-tick run. Opening it **re-simulates** rather than restoring a state dump: the page seeds a world
 from the link's own parameters, applies the event log at its recorded ticks, and runs to the shared
@@ -95,12 +98,16 @@ back to replaying. Only a share link rebuilds by ticking, so that is where the p
 during a link restore the arena shows `share link: replaying N of M ticks` over the world, the live sim is
 parked for the duration (two runs on one CPU only split it), and the replay is fed in 40 ms slices so the page
 keeps painting — measured 23 fps while a 7 995-tick run rebuilt itself in 19.9 s. A 150 ms slice, the size that
-caused the owner's blank-arena-at-7-fps report, paints at 7 fps and fails the gate. The proof runs in two places: headless, where a scripted run (four live edits, a
+caused the owner's blank-arena-at-7-fps report, paints at 7 fps and fails the gate. A replayed run gets its charts
+back as a side effect of rebuilding: the ticks are being simulated anyway, so the metric series are sampled as they
+land, at a steady stride instead of once per wall-clock quarter second — 63 samples live became 513 rebuilt. The proof runs in two places: headless, where a scripted run (four live edits, a
 bloom, a catastrophe, 6 500 ticks, three releases of engineered organisms) comes back with an identical
 `stateHash`, and in Chrome, where the browser check clicks `share`, opens the link in a page that never
 saw the run, and requires `stateHash` equality at the shared tick (7 995 ticks: 953 461 388 both sides) while
-measuring the frame rate of the rebuild; then it reopens the page with no seed and no link and requires the
-autosave to be an `EA2:` snapshot that lands on the tick it was written at (3 622) inside one 500 ms poll.
+measuring the frame rate of the rebuild and that the charts came with it (513 samples up to tick 7 681 of 7 685);
+then it reopens the page with no seed and no link and requires the
+autosave to be an `EA2:` snapshot that lands on the tick it was written at (3 622) inside one 500 ms poll, with the
+same number of graph samples as the save held (55 in, 55 out).
 
 Food comes in two classes: small green particles (radius 3, 25 energy) that any organism can handle,
 and large yellow-green ones (radius 8, 60 energy) that only an organism of radius ~14.5 or more can

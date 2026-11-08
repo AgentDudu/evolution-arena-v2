@@ -5,6 +5,7 @@
 
 import { CONFIG_VERSION, DEFAULT_PARAMS, GENES, validateParams, type SimParams } from '../core/config.ts';
 import type { Seed } from '../core/rng.ts';
+import type { MetricsHistory } from './history.ts';
 import { World, type WorldEvent } from './world.ts';
 
 export const SHARE_VERSION = 1;
@@ -207,17 +208,24 @@ export function applyEvent(world: World, ev: WorldEvent): void {
 
 /** Rebuild a shared run. A generator so the page can spend a frame budget at a time and paint the
  *  fast-forward instead of freezing the tab; it returns the world at the sender's tick. */
-export function* replayRun(run: RunState): Generator<number, World, void> {
+export function* replayRun(run: RunState, history?: MetricsHistory): Generator<number, World, void> {
   const world = new World({ ...DEFAULT_PARAMS, ...run.params, seed: run.seed });
+  // The run's graphs come back with it for free: the ticks are being simulated anyway, so the metric
+  // series are sampled as they land instead of starting empty when the rebuilt world appears.
+  const sample = (): void => {
+    if (history !== undefined && world.tick - history.lastTick >= history.stride) history.sample(world.report());
+  };
   for (const ev of run.events) {
     while (world.tick < ev.tick) {
       world.step();
+      sample();
       yield world.tick;
     }
     applyEvent(world, ev);
   }
   while (world.tick < run.tick) {
     world.step();
+    sample();
     yield world.tick;
   }
   return world;

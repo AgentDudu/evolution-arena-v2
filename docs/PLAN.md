@@ -237,7 +237,8 @@ full so memory stays flat.
   counters and the PRNG words, under an `EA2:` prefix. The plan said "not the raw world"; that turned out to
   be the wrong trade for a save the user opens locally, because re-ticking a long run costs the user minutes
   (measured 28 s for ~3 800 ticks, and a 150 ms slice budget took the page to 7 fps while it happened). The
-  raw world costs 240–300 KB and opens in about half a second. The replay representation stays where it is
+  raw world costs 240–300 KB and opens in about half a second, and it carries the run's sampled metric series with
+  it (88 bytes per sample, at most ~120 KB) so a restored run keeps its charts. The replay representation stays where it is
   needed: share links, which have to fit in a URL and stay checkable by a reader.
 - Share link: `?run=<base64 of seed + the params the run *started* with + the edit log>`. Opening it
   replays to the sender's tick count and the panel states both counts and whether the **stateHash
@@ -340,8 +341,9 @@ Actual files in `test/` (29 tests, ~41 s on this machine, `pnpm test`):
   delete, param sliders, three events), replays a share link against the sender's own `stateHash` while
   measuring the rebuild (turboes the run first so the replay is long enough to measure — 7 995 ticks in
   19.9 s, gated on the overlay reporting progress and the page still painting at >= 20 fps: the 150 ms slice
-  version measured 7 fps and failed), then opens the bare URL and gates on the autosave being an `EA2:`
-  snapshot that lands on the tick it was written to (3 622) inside one 500 ms poll,
+  version measured 7 fps and failed) and on the rebuilt run arriving with charts (513 samples, ending at tick
+  7 681 of 7 685), then opens the bare URL and gates on the autosave being an `EA2:` snapshot that lands on the
+  tick it was written to (3 622) inside one 500 ms poll, with the same number of graph samples as the save held,
   and gates the panel layout: no sideways overflow inside the
   column, the inspector pinned in view without scrolling, gene sliders filling the card, and text at
   luminance difference >= 0.22 against its own background in both themes.
@@ -538,6 +540,18 @@ path needed 28 s for a run of that size. The first round of tests failed for a r
 keeps `a/b/c/d` in a mix of signed and unsigned form (`(x+1)|0`), so the uint32 validation rejected a legitimate
 save — normalising the words on both sides is safe because every read in `next()` passes through `| 0` or `>>> 0`,
 and the 300-tick continuation test is what proves it.
+
+Item 7c (measured, `test/snapshot.test.ts`) — a restore that loses the charts is a restore that lost half of what the
+viewer was looking at, so the graphs come back with the run. A snapshot carries the sampled metric series
+(`MetricsHistory.saveState`/`adoptState`, validated in `worldFromSnapshot` next to every other part of the payload: a
+column that disagrees with its own header length, a missing column, or a column cut mid-value each refuse the save).
+A share-link restore needs no extra bytes: `replayRun` takes the history and samples it while it ticks, at the
+stride cadence rather than once per wall-clock quarter second, so the rebuilt run arrives with *denser* charts than
+the live page had (63 samples live, 513 rebuilt, last sample at tick 7 681 of 7 685). Measured through Chrome: the
+autosave carried 55 samples and the reopened page shows 55, last sample at the saved tick 3 543, restore 542 ms.
+The first version of this only worked in the unit test: the panel's `setWorld` built a fresh `MetricsHistory` no
+matter what the save contained, so the restored world was exact and its charts were empty — the check's graph gates
+are what would have caught that in the real page.
 
 Item 4b (measured, `scripts/foodweb.ts`) — item 4 only held for 5 sim-minutes. At a full sim hour the
 old default world was a giant monoculture: mean radius 15.4 against a ceiling of 16, dwarf class down

@@ -536,10 +536,11 @@ const runPanel = initRunPanel({
   getWorld: () => world,
   metrics: () => metrics,
   pause: () => setPaused(true),
-  setWorld: (next) => {
+  setWorld: (next, series) => {
     world = next;
     clock = createClock();
-    metrics = new MetricsHistory();
+    // A restored run brings its own sampled history; only a fresh world starts its graphs from empty.
+    metrics = series ?? new MetricsHistory();
     selectedLineage = -1;
     trailLength = 0;
     trailSlot = -1;
