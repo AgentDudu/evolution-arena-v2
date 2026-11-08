@@ -11,6 +11,8 @@
 
 import { validateParams, type SimParams } from '../core/config.ts';
 import type { Seed } from '../core/rng.ts';
+import type { HistoryState } from './history.ts';
+import { METRIC_COLUMNS } from './history.ts';
 import { World } from './world.ts';
 import type { WorldEvent } from './world.ts';
 
@@ -58,13 +60,22 @@ function fromBase64(text: string, kind: string): SnapshotArray {
   return new Ctor(bytes.buffer);
 }
 
-/** Compact string for localStorage. Around 0.4 MB for a full arena, which is why it stays out of URLs. */
-export function encodeSnapshot(world: World): string {
+/** Compact string for localStorage. Around 0.4 MB for a full arena, which is why it stays out of URLs.
+ *  `history` is the sampled graph series of the same run: a save that comes back with empty charts is a
+ *  save that lost half of what the viewer was looking at. Optional, and left out of share links. */
+export function encodeSnapshot(world: World, history?: { saveState(): HistoryState; length: number }): string {
   const s = world.saveState();
   const org: Record<string, string> = {};
   for (const [key, arr] of Object.entries(s.org)) org[key] = toBase64(arr);
   const food: Record<string, string> = {};
   for (const [key, arr] of Object.entries(s.foodArrays)) food[key] = toBase64(arr);
+  let hist: { stride: number; length: number; cols: Record<string, string> } | undefined;
+  if (history !== undefined && history.length > 0) {
+    const hs = history.saveState();
+    const cols: Record<string, string> = { tick: toBase64(hs.tick) };
+    for (const [key, arr] of Object.entries(hs.series)) cols[key] = toBase64(arr);
+    hist = { stride: hs.stride, length: hs.length, cols };
+  }
   return `${SNAPSHOT_PREFIX}${JSON.stringify({
     v: SNAPSHOT_VERSION,
     h: world.stateHash(),
@@ -80,6 +91,7 @@ export function encodeSnapshot(world: World): string {
     rng: s.rng,
     org,
     foodArrays: food,
+    hist,
   })}`;
 }
 
@@ -98,10 +110,34 @@ interface WireSnapshot {
   rng?: number[];
   org?: Record<string, string>;
   foodArrays?: Record<string, string>;
+  hist?: { stride?: number; length?: number; cols?: Record<string, string> };
+}
+
+/** The graph series, if the save carries them. Absent on a snapshot written before this existed, which
+ *  just means the restored run starts its graphs from the tick it woke up at. Validated here rather than
+ *  at adopt time, so a save with half its charts is refused by the same gate that refuses half a world. */
+function decodeHistory(wire: WireSnapshot): HistoryState | undefined {
+  const hist = wire.hist;
+  if (hist === undefined) return undefined;
+  const length = Number(hist.length ?? 0);
+  if (!Number.isInteger(length) || length < 0) throw new Error(`snapshot claims ${String(hist.length)} graph samples`);
+  const cols: Record<string, Float64Array> = {};
+  for (const [key, packed] of Object.entries(hist.cols ?? {})) cols[key] = fromBase64(packed, key) as Float64Array;
+  for (const name of ['tick', ...METRIC_COLUMNS]) {
+    if (cols[name] === undefined || cols[name].length !== length) {
+      throw new Error(`snapshot's graph column ${name} holds ${String(cols[name]?.length)}, expected ${String(length)}`);
+    }
+  }
+  return {
+    stride: Number(hist.stride ?? 15),
+    length,
+    tick: cols['tick'],
+    series: cols as HistoryState['series'],
+  };
 }
 
 /** Parse and validate, then rebuild the world. Throws with a message a person can act on. */
-export function worldFromSnapshot(text: string): { world: World; savedHash: number } {
+export function worldFromSnapshot(text: string): { world: World; savedHash: number; history?: HistoryState } {
   if (!text.startsWith(SNAPSHOT_PREFIX)) throw new Error('not a snapshot');
   let wire: WireSnapshot;
   try {
@@ -156,5 +192,5 @@ export function worldFromSnapshot(text: string): { world: World; savedHash: numb
   if (world.stateHash() !== savedHash) {
     throw new Error(`snapshot rebuilt a different world (saved hash ${String(savedHash)}, this build ${String(world.stateHash())})`);
   }
-  return { world, savedHash };
+  return { world, savedHash, history: decodeHistory(wire) };
 }
