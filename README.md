@@ -44,6 +44,14 @@ population, food, total energy, trait means as a share of each gene's range, spe
 radius histogram. The inspector follows a **lineage**, not an array slot, so the tracked organism
 survives the compaction that happens whenever one dies.
 
+That column is one scroll list of cards — charts, sandbox, sim knobs, run — with the inspector **pinned**
+at its bottom, so the genome readout is reachable without scrolling past the run buttons, and the
+`charts` / `sandbox` / `run` links in its header jump straight to a card. The `light` button switches the
+panel chrome dark ↔ light and remembers the choice; the arena and the plot surfaces stay dark in either
+theme because the sim's colour language (yellow = engineered lineage) is calibrated against a dark
+field. Under 900 px wide the column becomes a sheet below the arena instead of disappearing, which is
+what it used to do on a phone.
+
 The rest of the sandbox panel is the god-mode half. `x` (or the button) switches on **delete mode**, a
 sticky mode because clearing a bad lineage means several clicks: each arena click then removes the
 organism whose body is under the pointer, with only 6 world units of slack since deleting the wrong one
@@ -75,7 +83,10 @@ it **paused** at the shared tick so it does not drift while you read the number.
 round-trip is refused instead of half-loaded: a bad or truncated link, an out-of-range parameter, and a
 run too long to replay (over 60 000 ticks) each get their own message. A plain reload picks up the
 autosave — but an explicit `?seed=` does not, because asking for a seed means asking for that seed's
-fresh world. The proof runs in two places: headless, where a scripted run (four live edits, a
+fresh world. Rebuilding a long run means ticking it again, so during a restore the arena shows
+`autosave: replaying N of M ticks` over the world, the live sim is parked for the duration (two runs on
+one CPU only split it), and the replay is fed in 40 ms slices so the page keeps painting — measured 25 fps
+while a 3 768-tick run rebuilt itself in 28 s, against 7 fps when the slice was 150 ms. The proof runs in two places: headless, where a scripted run (four live edits, a
 bloom, a catastrophe, 6 500 ticks, three releases of engineered organisms) comes back with an identical
 `stateHash`, and in Chrome, where the browser check clicks `share`, opens the link in a page that never
 saw the run, and requires `stateHash` equality at the shared tick (33 951 ticks: 3 247 751 943 both

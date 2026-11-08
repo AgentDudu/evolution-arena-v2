@@ -1,0 +1,156 @@
+/* App chrome for the arena: canvas overlays on the left, one scroll column on the right.
+   Colour lives in tokens so the theme switch is one attribute on <html>; the chart cards keep the
+   dark plot surface in both themes because the sim's colour language (yellow = engineered lineage)
+   is calibrated against a dark field, and the arena canvas itself never changes. */
+
+:root {
+  color-scheme: dark;
+  --bg: #0b0f14;
+  --panel: #121a24;
+  --card: #17202b;
+  --line: #26323f;
+  --line-soft: #1e2833;
+  --fg: #e8eef6;
+  --dim: #8c9cb0;
+  --plot-bg: #131b25;
+  --accent: #ffe36b;
+  --btn: #1b2530;
+  --btn-line: #2c3a49;
+  --btn-hi: #24313f;
+  --field: #101822;
+  --on: #2f6f4f;
+  --on-line: #3f8f68;
+  --on-ink: #eafff3;
+  --bad: #b5443a;
+  --bad-line: #d1584c;
+  --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html[data-theme='light'] {
+  color-scheme: light;
+  --bg: #e9edf2;
+  --panel: #f7f9fc;
+  --card: #ffffff;
+  --line: #d6dee8;
+  --line-soft: #e3e9f0;
+  --fg: #16202c;
+  --dim: #5b6a7b;
+  --accent: #8a6d00;
+  --btn: #eef2f7;
+  --btn-line: #ccd6e2;
+  --btn-hi: #e3e9f1;
+  --field: #ffffff;
+  --on: #1f7a4d;
+  --on-line: #2c9a63;
+  --on-ink: #f2fff7;
+  --bad: #b03a2f;
+  --bad-line: #cb4c40;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 12.5px/1.45 var(--sans); }
+body { display: flex; }
+
+/* ---------- stage: arena canvas + its overlays ---------- */
+#stage { position: relative; flex: 1 1 auto; min-width: 0; }
+#arena { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+.panel {
+  position: absolute; background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; backdrop-filter: blur(6px);
+}
+#hud { top: 12px; left: 12px; display: grid; grid-template-columns: repeat(4, auto); gap: 6px 16px; }
+#hud .stat { display: grid; gap: 1px; }
+#hud .stat > span { font: 600 9.5px/1 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+#hud .stat > b { font: 13px/1.15 var(--mono); font-variant-numeric: tabular-nums; color: var(--fg); }
+#hud .strip { grid-column: 1 / -1; font: 11px/1.35 var(--mono); color: var(--dim); }
+#hud .strip b { color: var(--fg); font-weight: 500; }
+/* the restore overlay gets the accent colour so it reads as an announcement, not another dim label */
+#hud .strip#hud-status { color: var(--accent); }
+
+#controls { bottom: 12px; left: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; max-width: calc(100% - 24px); }
+#controls .group { display: flex; gap: 6px; align-items: center; }
+#hint { bottom: 12px; right: 12px; color: var(--dim); max-width: 420px; font-size: 11.5px; }
+#hint kbd {
+  font: 10.5px var(--mono); color: var(--fg); background: var(--btn); border: 1px solid var(--btn-line);
+  border-bottom-width: 2px; border-radius: 5px; padding: 1px 4px;
+}
+
+/* ---------- right column: sticky nav, cards, pinned inspector ---------- */
+#graphs {
+  flex: 0 0 380px; height: 100%; overflow-y: auto; padding: 0 12px 12px;
+  border-left: 1px solid var(--line); background: var(--panel); color: var(--dim); scrollbar-width: thin;
+}
+#graphs .phead {
+  position: sticky; top: 0; z-index: 3; background: var(--panel);
+  display: flex; align-items: center; gap: 8px; padding: 10px 0 8px; margin-bottom: 2px;
+}
+#graphs .phead h1 { margin: 0; font: 600 14px/1 var(--sans); color: var(--fg); }
+#graphs .jump { display: flex; gap: 5px; margin-left: auto; }
+#graphs .jump a {
+  font: 500 11px/1 var(--sans); color: var(--dim); text-decoration: none;
+  border: 1px solid var(--line); border-radius: 999px; padding: 4px 8px;
+}
+#graphs .jump a:hover { color: var(--fg); border-color: var(--btn-line); }
+
+.card { background: var(--card); border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px 12px 12px; margin-bottom: 10px; }
+.card > h2 {
+  margin: 0 0 8px; display: flex; gap: 8px; align-items: baseline;
+  font: 600 10.5px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--dim);
+}
+.card > h2 .k { font-size: 10.5px; font-weight: 500; letter-spacing: 0; text-transform: none; }
+.card > h3 { margin: 12px 0 4px; font: 600 10.5px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--dim); }
+#sec-charts { background: var(--plot-bg); color: #93a3b6; }
+/* the plot surface keeps its own ink in both themes: a --dim that is dark enough to read on white
+   would be invisible on the dark chart card */
+#sec-charts > h2, #sec-charts .cap, #sec-charts .u-legend { color: #93a3b6; }
+#sec-charts .chart { margin-bottom: 8px; overflow: hidden; }
+#sec-charts .cap { font: 11px var(--sans); }
+#histogram { width: 100%; height: 84px; display: block; }
+#sec-inspect { position: sticky; bottom: 0; z-index: 2; margin-bottom: 0; box-shadow: 0 -10px 14px -12px rgb(0 0 0 / 55%); }
+#inspector { color: var(--fg); white-space: pre-wrap; font: 11.5px/1.5 var(--mono); }
+#inspector.is-empty { color: var(--dim); }
+
+/* one gene per row: the label gets a fixed column so a long key never runs over its slider */
+.genes { display: grid; gap: 3px 0; }
+.genes label { display: grid; grid-template-columns: 7rem 1fr 3.4rem; gap: 0 10px; align-items: center; color: var(--fg); }
+.genes .v { font: 12px var(--mono); font-variant-numeric: tabular-nums; text-align: right; color: var(--fg); }
+.genes input[type='range'] { width: 100%; height: 18px; accent-color: var(--accent); }
+
+.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.note { margin: 8px 0 0; font-size: 11px; color: var(--dim); }
+.k { color: var(--dim); }
+
+button, input[type='text'], input[type='number'], select {
+  font: 12.5px var(--sans); color: var(--fg); background: var(--btn);
+  border: 1px solid var(--btn-line); border-radius: 8px; padding: 5px 9px;
+}
+input[type='number'] { font-family: var(--mono); width: 4.2rem; }
+#run-link { flex: 1 1 100%; min-width: 0; font: 11px var(--mono); background: var(--field); }
+#run-name { flex: 1 1 6rem; min-width: 0; }
+#run-slots { flex: 1 1 6rem; min-width: 0; }
+button:hover { background: var(--btn-hi); }
+button:active { transform: translateY(1px); }
+button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button[aria-pressed='true'] { background: var(--on); border-color: var(--on-line); color: var(--on-ink); }
+button.primary { background: var(--on); border-color: var(--on-line); color: var(--on-ink); }
+button.primary:hover { background: color-mix(in srgb, var(--on) 82%, var(--fg)); }
+button.danger { color: var(--bad-line); border-color: color-mix(in srgb, var(--bad-line) 55%, var(--line)); background: transparent; }
+button.danger:hover { background: color-mix(in srgb, var(--bad) 22%, transparent); }
+/* segmented speed control: four choices that belong together read as one control */
+.seg { display: inline-flex; border: 1px solid var(--btn-line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; background: var(--btn); padding: 5px 10px; }
+.seg button + button { box-shadow: inset 1px 0 0 var(--btn-line); }
+.seg button[aria-pressed='true'] { background: var(--on); color: var(--on-ink); }
+label { color: var(--dim); display: inline-flex; gap: 5px; align-items: center; }
+input[type='checkbox'] { accent-color: var(--accent); }
+#graphs .u-legend { font: 10.5px var(--sans) !important; color: var(--dim); }
+
+@media (max-width: 900px) {
+  /* the alternative to the old `display: none` that deleted the graphs on a phone: the column
+     becomes a sheet under the arena instead of disappearing */
+  body { flex-direction: column; }
+  #graphs { flex: 1 1 auto; min-height: 46vh; border-left: 0; border-top: 1px solid var(--line); }
+  #hint { display: none; }
+  #hud { grid-template-columns: repeat(3, auto); }
+}

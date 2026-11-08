@@ -4,112 +4,102 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Evolution Arena</title>
-    <style>
-      :root {
-        color-scheme: dark;
-        --fg: #e8eef6;
-        --dim: #8c9cb0;
-        --bg: #0b0f14;
-        --panel: #131a23;
-        --line: #2a3644;
-      }
-      * { box-sizing: border-box; }
-      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
-      body { display: flex; }
-      #stage { position: relative; flex: 1 1 auto; min-width: 0; }
-      #arena { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
-      .panel {
-        position: absolute; background: color-mix(in srgb, var(--panel) 85%, transparent);
-        border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; backdrop-filter: blur(4px);
-      }
-      #hud { top: 12px; left: 12px; min-width: 260px; white-space: pre; }
-      #controls { bottom: 12px; left: 12px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; max-width: calc(100% - 24px); }
-      #hint { bottom: 12px; right: 12px; color: var(--dim); max-width: 340px; }
-      #graphs {
-        flex: 0 0 322px; height: 100%; overflow-y: auto; padding: 8px 10px;
-        border-left: 1px solid var(--line); background: var(--panel); color: var(--dim);
-      }
-      #graphs .chart { margin-bottom: 10px; }
-      #graphs .chart > div { margin-top: 2px; }
-      #histogram { width: 100%; height: 84px; display: block; }
-      #inspector { color: var(--fg); white-space: pre-wrap; margin: 10px 0 6px; border-top: 1px solid var(--line); padding-top: 8px; }
-      #sandbox { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 8px; }
-      #sandbox .genes { display: grid; grid-template-columns: 5.5em 1fr 3.5em; gap: 1px 6px; align-items: center; margin-top: 4px; }
-      #sandbox .genes input[type='range'] { width: 100%; accent-color: #ffe36b; }
-      #sandbox .v { color: var(--fg); text-align: right; }
-      #sandbox .row { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
-      b { color: var(--fg); }
-      span.k, .k { color: var(--dim); }
-      /* one slider per row: the sim keys are long enough that a label needs the whole line */
-      #sim-params { grid-template-columns: 1fr; }
-      #sim-params input[type='range'] { flex: 1 1 auto; }
-      #run-link { flex: 1 1 100%; min-width: 0; font: 10px ui-monospace, Consolas, monospace; }
-      #run-name { flex: 1 1 5rem; min-width: 0; }
-      #run-slots { flex: 1 1 5rem; min-width: 0; }
-      button, input[type='text'] {
-        font: inherit; color: var(--fg); background: #1b2530; border: 1px solid var(--line);
-        border-radius: 6px; padding: 4px 8px;
-      }
-      button[aria-pressed='true'] { background: #2f6f4f; border-color: #3f8f68; }
-      label { color: var(--dim); display: inline-flex; gap: 4px; align-items: center; }
-      @media (max-width: 900px) { #graphs { display: none; } }
-    </style>
+    <link rel="stylesheet" href="/src/ui.css" />
   </head>
   <body>
     <div id="stage">
       <canvas id="arena" aria-label="Aerial view of the whole arena"></canvas>
 
-      <div class="panel" id="hud">loading…</div>
+      <div class="panel" id="hud" aria-label="live world state">
+        <div class="stat"><span>tick</span><b id="hud-tick">–</b></div>
+        <div class="stat"><span>pop</span><b id="hud-pop">–</b></div>
+        <div class="stat"><span>food</span><b id="hud-food">–</b></div>
+        <div class="stat"><span>species</span><b id="hud-species">–</b></div>
+        <div class="stat"><span>generation</span><b id="hud-gen">–</b></div>
+        <div class="stat"><span>fps</span><b id="hud-fps">–</b></div>
+        <div class="stat"><span>speed</span><b id="hud-speed">–</b></div>
+        <div class="stat"><span>ms / tick</span><b id="hud-ms">–</b></div>
+        <div class="strip" id="hud-genome">mean genome · –</div>
+        <div class="strip" id="hud-engineered" hidden></div>
+        <div class="strip" id="hud-status" hidden></div>
+      </div>
 
       <div class="panel" id="controls">
-        <button id="playpause" aria-pressed="true">pause</button>
-        <button id="step">step</button>
-        <span class="k">speed</span>
-        <button data-speed="1" aria-pressed="true">1x</button>
-        <button data-speed="2" aria-pressed="false">2x</button>
-        <button data-speed="4" aria-pressed="false">4x</button>
-        <button data-speed="8" aria-pressed="false">8x</button>
-        <button id="turbo" aria-pressed="false">turbo</button>
-        <label>seed <input id="seed" type="text" size="10" /></label>
-        <button id="reset">reset</button>
+        <div class="group">
+          <button id="playpause" aria-pressed="true">pause</button>
+          <button id="step">step</button>
+          <button id="turbo" aria-pressed="false">turbo</button>
+        </div>
+        <div class="seg" role="group" aria-label="simulation speed">
+          <button data-speed="1" aria-pressed="true">1x</button>
+          <button data-speed="2" aria-pressed="false">2x</button>
+          <button data-speed="4" aria-pressed="false">4x</button>
+          <button data-speed="8" aria-pressed="false">8x</button>
+        </div>
+        <div class="group">
+          <label>seed <input id="seed" type="text" size="10" /></label>
+          <button id="reset">reset</button>
+        </div>
       </div>
 
       <div class="panel" id="hint">
-        click = drop food · shift+click = inspect organism · e = arm release of an engineered organism ·
-        x = delete mode · i = isolate its lineage · space = pause · n = step · 1/2/4/8 = speed · t = turbo
+        <kbd>click</kbd> drop food · <kbd>shift+click</kbd> inspect · <kbd>e</kbd> arm release ·
+        <kbd>x</kbd> delete mode · <kbd>i</kbd> isolate lineage · <kbd>space</kbd> pause ·
+        <kbd>n</kbd> step · <kbd>1</kbd><kbd>2</kbd><kbd>4</kbd><kbd>8</kbd> speed · <kbd>t</kbd> turbo
       </div>
     </div>
 
-    <aside id="graphs" aria-label="Live population and trait graphs">
-      <div class="chart"><span class="k">population / food · yellow = engineered lineage</span><div id="chart-pop"></div></div>
-      <div class="chart"><span class="k">total energy</span><div id="chart-energy"></div></div>
-      <div class="chart"><span class="k">size classes now (radius bins)</span><canvas id="histogram"></canvas></div>
-      <div class="chart"><span class="k">trait means · share of gene range</span><div id="chart-traits"></div></div>
-      <div class="chart"><span class="k">species (size classes over 20)</span><div id="chart-species"></div></div>
-      <div id="sandbox">
-        <span class="k">engineer · genome of the organism to release</span>
+    <aside id="graphs" aria-label="Live graphs, sandbox tools and run save/share">
+      <div class="phead">
+        <h1>Evolution Arena</h1>
+        <nav class="jump" aria-label="panel sections">
+          <a href="#sec-charts">charts</a><a href="#sec-sandbox">sandbox</a><a href="#sec-run">run</a>
+        </nav>
+        <button id="theme" type="button" aria-label="switch the panel colour theme">light</button>
+      </div>
+
+      <section class="card" id="sec-charts">
+        <h2>charts <span class="k">live · 4 Hz</span></h2>
+        <div class="chart"><span class="cap">population · engineered in yellow</span><div id="chart-pop"></div></div>
+        <div class="chart"><span class="cap">total energy</span><div id="chart-energy"></div></div>
+        <div class="chart"><span class="cap">size classes now (radius bins)</span><canvas id="histogram"></canvas></div>
+        <div class="chart"><span class="cap">trait means · share of gene range</span><div id="chart-traits"></div></div>
+        <div class="chart"><span class="cap">species (size classes over 20)</span><div id="chart-species"></div></div>
+      </section>
+
+      <section class="card" id="sec-sandbox">
+        <h2>sandbox <span class="k">design a genome, release it, compete</span></h2>
         <div class="genes" id="engineer-genes"></div>
         <div class="row">
           <label>count <input id="engineer-count" type="number" min="1" max="50" value="10" size="3" /></label>
           <button id="engineer-wild" type="button">copy wild mean</button>
-          <button id="engineer-arm" aria-pressed="false">arm placement (e)</button>
         </div>
         <div class="row">
+          <button id="engineer-arm" class="primary" type="button" aria-pressed="false">arm placement (e)</button>
           <button id="engineer-delete" type="button" aria-pressed="false">delete (x)</button>
-          <button id="ev-bloom" type="button">food bloom</button>
-          <button id="ev-cat" type="button">catastrophe</button>
-          <button id="ev-burst" type="button">mutation burst</button>
         </div>
-        <span class="k">sim · applies to the running world</span>
+      </section>
+
+      <section class="card" id="sec-sim">
+        <h2>sim knobs <span class="k">apply to the running world</span></h2>
         <div class="genes" id="sim-params"></div>
         <div class="row">
           <label><input id="sim-predation" type="checkbox" /> predation</label>
           <label><input id="sim-reseed" type="checkbox" /> reseed when empty</label>
         </div>
-        <div class="k" id="sim-status">world size and population caps stay fixed per run</div>
-        <span class="k">run · save, share, replay</span>
+        <h3>events</h3>
         <div class="row">
-          <button id="run-share" type="button">share link</button>
+          <button id="ev-bloom" type="button">food bloom</button>
+          <button id="ev-cat" type="button">catastrophe</button>
+          <button id="ev-burst" type="button">mutation burst</button>
+        </div>
+        <p class="note" id="sim-status">world size and population caps stay fixed per run</p>
+      </section>
+
+      <section class="card" id="sec-run">
+        <h2>run <span class="k">save · share · replay</span></h2>
+        <div class="row">
+          <button id="run-share" class="primary" type="button">share link</button>
           <button id="export-csv" type="button">csv</button>
           <button id="export-json" type="button">json</button>
         </div>
@@ -119,12 +109,16 @@
           <button id="run-save" type="button">save slot</button>
           <select id="run-slots" aria-label="saved slots"></select>
           <button id="run-load" type="button">load</button>
-          <button id="run-forget" type="button">forget</button>
+          <button id="run-forget" class="danger" type="button">forget</button>
         </div>
-        <div class="k" id="run-status">reload brings the last run back</div>
-      </div>
-      <div id="inspector"><span class="k">shift+click an organism to inspect it</span></div>
-      <label><input id="isolate" type="checkbox" /> isolate its lineage (i)</label>
+        <p class="note" id="run-status">reload brings the last run back</p>
+      </section>
+
+      <section class="card" id="sec-inspect">
+        <h2>inspector <span class="k">shift+click an organism</span></h2>
+        <div id="inspector" class="is-empty">shift+click an organism to inspect it</div>
+        <div class="row"><label><input id="isolate" type="checkbox" /> isolate its lineage (i)</label></div>
+      </section>
     </aside>
 
     <script type="module" src="/src/main.ts"></script>

@@ -99,6 +99,62 @@ const expression = `(async () => {
     for (let i = 3; i < hdata.length; i += 4) if (hdata[i] !== 0) histInk++;
     const uPlotInk = window.arena.uPlotCanvases();
 
+    // Layout gates for the panel restyle: the column must fit its own width (it used to be 405 px of
+    // content in a 306 px column, which put a sideways scrollbar inside the panel), the inspector must
+    // be pinned where it can be seen without scrolling past the run section, and the theme switch must
+    // not disturb the plots or the arena field.
+    const aside = document.getElementById('graphs');
+    const layout = {
+      overflowX: aside.scrollWidth - aside.clientWidth,
+      contentHeight: aside.scrollHeight,
+      viewportHeight: aside.clientHeight,
+      inspectorPinned: false,
+      geneRowWidth: 0,
+      geneSliderWidth: 0,
+      panelFont: '',
+      contrast: {},
+      lowContrast: [],
+      theme: '',
+    };
+    const asideBox = aside.getBoundingClientRect();
+    const inspectCard = document.getElementById('sec-inspect').getBoundingClientRect();
+    layout.inspectorPinned = inspectCard.top >= asideBox.top - 1 && inspectCard.bottom <= asideBox.bottom + 1;
+    const geneLabel = document.querySelector('#engineer-genes label');
+    layout.geneRowWidth = geneLabel === null ? 0 : Math.round(geneLabel.getBoundingClientRect().width);
+    const themeButton = document.getElementById('theme');
+    themeButton.click();
+    const wentLight = document.documentElement.dataset.theme === 'light';
+    const lightPanels = window.arena.uPlotCount();
+    // legibility while light: the chart card deliberately stays dark, so anything sitting on it needs
+    // ink that reads on a dark surface even when the rest of the panel went light
+    const lum = (c) => {
+      const n = (c.match(/\\d+/g) || [0, 0, 0]).map(Number);
+      return (0.2126 * n[0] + 0.7152 * n[1] + 0.0722 * n[2]) / 255;
+    };
+    const contrast = (name, fg, bg) => {
+      const d = Math.abs(lum(fg) - lum(bg));
+      layout.contrast[name] = Math.round(d * 100);
+      if (d < 0.22) layout.lowContrast.push(name + ' Δ' + d.toFixed(2));
+    };
+    const plot = document.getElementById('sec-charts');
+    const plotBg = getComputedStyle(plot).backgroundColor;
+    contrast('plot caption on the dark plot surface', getComputedStyle(document.querySelector('#sec-charts .cap')).color, plotBg);
+    contrast('heading on the plot surface', getComputedStyle(plot.querySelector('h2')).color, plotBg);
+    contrast('panel text on the panel', getComputedStyle(aside).color, getComputedStyle(aside).backgroundColor);
+    contrast('card text on a card', getComputedStyle(document.querySelector('#sec-run h2')).color, getComputedStyle(document.getElementById('sec-run')).backgroundColor);
+    contrast('button label on a button', getComputedStyle(document.getElementById('run-share')).color, getComputedStyle(document.getElementById('run-share')).backgroundColor);
+    contrast('inspector text on its card', getComputedStyle(document.getElementById('inspector')).color, getComputedStyle(document.getElementById('sec-inspect')).backgroundColor);
+    // the hud and hint overlays are skipped here: their background is a colour-mix with alpha, so the
+    // computed value is not an opaque colour and a luminance difference against it would be meaningless
+    const geneRow = document.querySelector('#engineer-genes label');
+    layout.geneSliderWidth = Math.round(geneRow.querySelector('input').getBoundingClientRect().width);
+    layout.panelFont = getComputedStyle(aside).fontFamily.split(',')[0].replace(/"/g, '');
+    themeButton.click();
+    layout.theme =
+      wentLight && lightPanels === panels && document.documentElement.dataset.theme !== 'light'
+        ? 'ok'
+        : 'light=' + String(wentLight) + ' panelsInLight=' + String(lightPanels) + ' panels=' + String(panels) + ' backTo=' + String(document.documentElement.dataset.theme ?? 'dark');
+
     // inspector: select a known organism through the same path shift+click uses, then toggle isolate
     window.arena.select(0);
     await new Promise((r) => setTimeout(r, 400));
@@ -306,7 +362,8 @@ const expression = `(async () => {
       sandbox,
       tools,
       inspector: { text: inspectorText, isolateToggled: isolated },
-      hud: document.getElementById('hud').textContent,
+      layout,
+      hud: document.getElementById('hud').innerText,
     };
   } catch (error) {
     return {
@@ -328,11 +385,12 @@ await new Promise<void>((resolve, reject) => {
 });
 
 // A target appears in /json/list before its document has committed, so evaluating straight away can
-// land on the browser's blank start page (window.arena undefined, location about:blank).
+// land on the browser's blank start page. Note `window.arena` alone proves nothing: the canvas has
+// id="arena", so the browser exposes a stale element under that name long before main.ts has run.
 async function waitForApp(): Promise<boolean> {
   for (let attempt = 0; attempt < 40; attempt++) {
     const probe = await call('Runtime.evaluate', {
-      expression: 'String(!!(window.arena && document.getElementById("arena")))',
+      expression: 'String(!!(window.arena && typeof window.arena.world === "function" && window.arena.world()))',
       returnByValue: true,
     });
     if (String(probe.result?.result?.value) === 'true') return true;
@@ -391,6 +449,7 @@ type Payload = {
   bigFoodInkPixels?: number;
   graph?: { panels?: number; uPlotCanvases?: number; histogramInkPixels?: number };
   inspector?: { text?: string; isolateToggled?: boolean };
+  layout?: { overflowX?: number; contentHeight?: number; viewportHeight?: number; inspectorPinned?: boolean; geneRowWidth?: number; geneSliderWidth?: number; panelFont?: string; contrast?: Record<string, number>; lowContrast?: string[]; theme?: string };
   sandbox?: { error?: string | null; placed?: number; surviving?: number; armedLabel?: string; ringBefore?: number; ringAfter?: number };
   tools?: {
     error?: string | null;
@@ -482,18 +541,35 @@ console.log('share replay:', JSON.stringify(replay));
 
 // Stage three: open the page with no seed and no link at all. That is the autosave path - the browser
 // profile still holds the last run, and the page is supposed to pick it up instead of starting fresh.
-let autosave: { status?: string; tick?: number; error?: string } = {};
+let autosave: { status?: string; tick?: number; restoreFps?: number; restoreMs?: number; sawProgress?: boolean; error?: string } = {};
 if (!replay.error) {
   try {
+    const startedAt = Date.now();
+    // The profile's autosave would otherwise hold a few hundred ticks, a restore that finishes before
+    // the first poll: nothing to measure. Turbo the seeded run up to a few thousand ticks first —
+    // that is the size a real tab reaches after a few minutes, and the size the owner saw.
+    await call('Page.navigate', { url });
+    await sleep(1200);
+    await call('Runtime.evaluate', { expression: `document.getElementById('turbo')?.click()` });
+    await sleep(17000); // the autosave lands every 5 s, so this writes the long run at least three times
+    // the symptom this stage now guards: a reload rebuilt the saved run in 150 ms CPU slices, which
+    // starved requestAnimationFrame, so the arena sat nearly empty at a few fps and then filled up
+    // frozen. Measure the frame rate while the replay is actually running, and require the arena
+    // overlay to report progress.
+    let sawProgress = false;
+    let progressAt: { at: number; frames: number } | null = null;
     await call('Page.navigate', { url: url.split('?')[0] });
     for (let attempt = 0; attempt < 120; attempt++) {
       await sleep(500);
       const now = await call('Runtime.evaluate', {
         expression: `(() => {
           const w = window.arena && window.arena.world();
+          const overlay = document.getElementById('hud-status');
           return JSON.stringify({
             status: document.getElementById('run-status') ? document.getElementById('run-status').textContent : '',
             tick: w ? w.tick : -1,
+            frames: window.arena && window.arena.frameCount ? window.arena.frameCount() : -1,
+            overlay: overlay && !overlay.hidden ? String(overlay.textContent ?? '') : '',
           });
         })()`,
         returnByValue: true,
@@ -501,9 +577,25 @@ if (!replay.error) {
       const seen = JSON.parse(String((now.result as { result?: { value?: string } } | undefined)?.result?.value ?? '{}')) as {
         status?: string;
         tick?: number;
+        frames?: number;
+        overlay?: string;
       };
+      if (!progressAt && (seen.overlay ?? '').includes('replaying')) {
+        sawProgress = true;
+        progressAt = { at: Date.now(), frames: seen.frames ?? 0 };
+      }
       if ((seen.status ?? '').includes('loaded') || (seen.status ?? '').includes('refused')) {
-        autosave = { status: seen.status, tick: seen.tick };
+        const finishedAt = Date.now();
+        autosave = {
+          status: seen.status,
+          tick: seen.tick,
+          restoreMs: finishedAt - startedAt,
+          sawProgress,
+          restoreFps:
+            progressAt && finishedAt > progressAt.at
+              ? Math.round((((seen.frames ?? 0) - progressAt.frames) / (finishedAt - progressAt.at)) * 1000)
+              : undefined,
+        };
         break;
       }
     }
@@ -546,8 +638,20 @@ if (payload.error === undefined) {
   if (!replay.error && replay.paused !== 'play') gates.push(`the restored run was left running (play button reads "${String(replay.paused)}"), so its state kept moving away from the shared one`);
   if (autosave.error) gates.push(`the autosave stage threw ${autosave.error}`);
   if (!replay.error && !(autosave.status ?? '').includes('autosave loaded')) gates.push(`opening the page with no seed and no link did not pick up the autosaved run (${String(autosave.status)})`);
+  if (autosave.restoreFps !== undefined && autosave.restoreFps < 20) {
+    gates.push(`the page painted at ${String(autosave.restoreFps)} fps while rebuilding the saved run (${String(autosave.restoreMs)} ms) — it should stay watchable`);
+  }
+  if ((autosave.restoreMs ?? 0) > 1200 && !autosave.sawProgress) {
+    gates.push('a restore longer than a second showed no progress readout over the arena (#hud-status)');
+  }
   if (!replay.error && !(autosave.status ?? '').includes('matches the sender')) gates.push('the autosaved run did not replay to its own state hash');
   if (!payload.inspector?.text?.includes('lineage')) gates.push('inspector produced no genome');
+  if ((payload.layout?.overflowX ?? 0) > 1) gates.push(`the panel scrolls sideways by ${String(payload.layout?.overflowX)} px — content is wider than the column`);
+  if (payload.layout && !payload.layout.inspectorPinned) gates.push('the inspector card is not pinned in view at the bottom of the panel');
+  if ((payload.layout?.geneRowWidth ?? 0) < 300) gates.push(`a gene row measured ${String(payload.layout?.geneRowWidth)} px, so sliders are not filling the card`);
+  if (payload.layout?.theme !== 'ok') gates.push(`the theme switch did not behave (${String(payload.layout?.theme)})`);
+  const lowContrast = payload.layout?.lowContrast ?? [];
+  if (lowContrast.length > 0) gates.push(`text below contrast Δ0.22 in the light theme: ${lowContrast.join('; ')}`);
 }
 if (gates.length > 0) console.log('gates failed:', gates);
 
