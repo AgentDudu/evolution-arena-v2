@@ -25,17 +25,26 @@ it runs 912 ticks/s at pop 651 while painting at 57 fps.
 ```sh
 pnpm install
 pnpm dev                          # http://localhost:5173 — whole world fitted to the window
-pnpm test                         # everything: 131 tests, ~4 min (long arena runs dominate)
-pnpm test:quick                   # same suite minus *.long.test.ts: 108 tests, ~15 s — the edit loop
+pnpm test                         # everything: 133 tests, ~4 min (long arena runs dominate)
+pnpm test:quick                   # same suite minus *.long.test.ts: 110 tests, ~15 s — the edit loop
 pnpm typecheck
 node scripts/headless.ts 36000    # [ticks] [seed] [json params] -> report + species + state hash
 node --expose-gc scripts/headless.ts 216000 arena-1   # a sim-hour soak: buffers + collected heap
 node scripts/foodweb.ts 216000 arena-1  # size structure every sim-minute: radius percentiles,
                                   # morph counts, large-particle reservoir. [ticks] [seed] [json params]
-pnpm build && npx vite preview --port 4321 &
+pnpm build && npx vite preview --port 4321
 pnpm browser-check http://localhost:4321/?seed=check 4 240   # headless Edge over CDP: ticks/s, painted
                                   # pixels, 4 graph panels, then 240 s turbo soak with heap per 10 s
 ```
+
+There is a CI workflow, `.github/workflows/ci.yml.disabled`, and it is **switched off**: rename it to
+`ci.yml` to enable. It is off because no GitHub-hosted runner is provisioned for this account — every
+job, including a one-step `echo`, fails in ~4 s with `runner_id=0` and no log — so an enabled workflow
+would put a red X on every push for a reason that is not the code. When runners work, it runs typecheck
++ `test:quick` + build on every push and pull request, and the full `pnpm test` on a merge.
+`browser-check` is not in CI either way: it drives a real headless Edge over CDP and that toolchain is
+not on a runner. So today every gate below is run by hand, and `browser-check` is the only thing that
+proves the UI, the replay, the restore, and the throughput floor.
 
 Controls: click = drop food, shift+click = inspect an organism (genome readout + sense radius),
 i = isolate its lineage (everything else dims, its trail is drawn), space = pause, n = one tick,
