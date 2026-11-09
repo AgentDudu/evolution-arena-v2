@@ -3,6 +3,21 @@
 
 import { clamp } from './space.ts';
 
+/** A reusable two-filter query for UniformGrid.nearestPair(). One of these lives on the caller for
+ *  its whole life and is mutated before each call, because the tick allocates nothing. Set a filter's
+ *  `lo` to Infinity to disable it. See nearestPair for the meaning of the fields. */
+export interface PairQuery {
+  sizes: Float64Array;
+  exclude: number;
+  loA: number;
+  mulA: number;
+  hiA: number;
+  flagsA: Uint8Array | null;
+  loB: number;
+  mulB: number;
+  hiB: number;
+}
+
 export class UniformGrid {
   readonly cols: number;
   readonly rows: number;
@@ -151,5 +166,72 @@ export class UniformGrid {
       }
     }
     return best;
+  }
+
+  /** Two accept rules, one walk. `think()` asks the organism grid for the nearest prey and the
+   *  nearest threat using the same centre and the same radius, which meant walking those cells twice
+   *  per organism per tick; this answers both in one pass.
+   *
+   *  `q` is reused rather than built per query — the tick allocates nothing — so mutate its fields
+   *  before each call. `out[0]` gets the best item passing filter A, `out[1]` the best passing
+   *  filter B. A filter is switched off by setting its `lo` to Infinity, which is also how the
+   *  world-wide radius bounds let the sim skip a rule that cannot possibly match. Each filter keeps
+   *  its own distance and its own `<=` tie rule, so both answers are exactly what two separate
+   *  nearestSized() walks returned. */
+  nearestPair(
+    x: number,
+    y: number,
+    r: number,
+    xs: Float64Array,
+    ys: Float64Array,
+    q: PairQuery,
+    out: Int32Array,
+  ): void {
+    let bestA = -1;
+    let bestA2 = r * r;
+    let bestB = -1;
+    let bestB2 = r * r;
+    const sizes = q.sizes;
+    const exclude = q.exclude;
+    const loA = q.loA;
+    const mulA = q.mulA;
+    const hiA = q.hiA;
+    const flagsA = q.flagsA;
+    const loB = q.loB;
+    const mulB = q.mulB;
+    const hiB = q.hiB;
+    const cx0 = clamp(Math.floor((x - r) / this.cellSize), 0, this.cols - 1);
+    const cx1 = clamp(Math.floor((x + r) / this.cellSize), 0, this.cols - 1);
+    const cy0 = clamp(Math.floor((y - r) / this.cellSize), 0, this.rows - 1);
+    const cy1 = clamp(Math.floor((y + r) / this.cellSize), 0, this.rows - 1);
+    for (let cy = cy0; cy <= cy1; cy++) {
+      const row = cy * this.cols;
+      for (let cx = cx0; cx <= cx1; cx++) {
+        let item = this.heads[row + cx] ?? -1;
+        while (item !== -1) {
+          if (item !== exclude) {
+            const s = sizes[item] ?? 0;
+            const passA = s >= loA && s * mulA <= hiA && (flagsA === null || (flagsA[item] ?? 0) === 0);
+            const passB = s >= loB && s * mulB <= hiB;
+            if (passA || passB) {
+              const dx = (xs[item] ?? 0) - x;
+              const dy = (ys[item] ?? 0) - y;
+              const d2 = dx * dx + dy * dy;
+              if (passA && d2 <= bestA2) {
+                bestA2 = d2;
+                bestA = item;
+              }
+              if (passB && d2 <= bestB2) {
+                bestB2 = d2;
+                bestB = item;
+              }
+            }
+          }
+          item = this.next[item] ?? -1;
+        }
+      }
+    }
+    out[0] = bestA;
+    out[1] = bestB;
   }
 }

@@ -10,7 +10,7 @@ import {
   type GeneName,
   type SimParams,
 } from '../core/config.ts';
-import { UniformGrid } from '../core/grid.ts';
+import { UniformGrid, type PairQuery } from '../core/grid.ts';
 import { Rng, type Seed } from '../core/rng.ts';
 import { bounce, clamp, dist2, wrap } from '../core/space.ts';
 import type { SnapshotArray, SnapshotState } from './snapshot.ts';
@@ -119,6 +119,13 @@ export class World {
 
   private readonly orgGrid: UniformGrid;
   private readonly foodGrid: UniformGrid;
+  /** Reused by think() for the combined prey+threat walk, so the query costs no allocation. */
+  private readonly pairQ: PairQuery;
+  private readonly pairOut = new Int32Array(2);
+  /** Largest and smallest radius in the arena this tick. Used only to prove a prey or threat query
+   *  has no answer at all, which lets think() skip walking for it. */
+  private minRadiusSeen = Infinity;
+  private maxRadiusSeen = 0;
 
   constructor(params: SimParams, seed?: Seed) {
     validateParams(params);
@@ -156,6 +163,7 @@ export class World {
 
     this.orgGrid = new UniformGrid(params.worldWidth, params.worldHeight, 64, this.cap);
     this.foodGrid = new UniformGrid(params.worldWidth, params.worldHeight, 32, params.foodCap);
+    this.pairQ = { sizes: this.gene.radius, exclude: -1, loA: Infinity, mulA: 1, hiA: 0, flagsA: null, loB: Infinity, mulB: 1, hiB: 0 };
 
     this.reset();
   }
@@ -525,7 +533,16 @@ export class World {
   private rebuildGrids(): void {
     this.orgGrid.clear();
     this.foodGrid.clear();
-    for (let i = 0; i < this.alive; i++) this.orgGrid.insert(i, this.x[i], this.y[i]);
+    let minR = Infinity;
+    let maxR = 0;
+    for (let i = 0; i < this.alive; i++) {
+      const r = this.gene.radius[i];
+      if (r < minR) minR = r;
+      if (r > maxR) maxR = r;
+      this.orgGrid.insert(i, this.x[i], this.y[i]);
+    }
+    this.minRadiusSeen = minR;
+    this.maxRadiusSeen = maxR;
     for (let i = 0; i < this.foodCount; i++) this.foodGrid.insert(i, this.fx[i], this.fy[i]);
   }
 
@@ -550,13 +567,32 @@ export class World {
         sy += (dy / d) * w;
       }
 
+      // Prey and threat both come from scanning the same cells of the same grid at the same radius,
+      // so one walk answers both (UniformGrid.nearestPair). The arena-wide radius bounds switch a rule
+      // off when nothing in the world can satisfy it — a proof that the answer is empty, not a guess,
+      // so skipping that walk cannot change any outcome.
+      const ri = this.gene.radius[i];
+      const fw = this.gene.flee[i];
+      const wantPrey =
+        p.predationEnabled && ri >= p.predatorMinRadius && this.minRadiusSeen * p.predationRatio <= ri;
+      const wantThreat = fw > 0 && this.maxRadiusSeen >= ri * p.predationRatio;
+
       // A smaller organism counts as food, so hunting reuses the seekFood weight instead of a new
       // gene: chase whichever edible thing is nearer.
-      if (p.predationEnabled && this.gene.radius[i] >= p.predatorMinRadius) {
-        const prey = this.orgGrid.nearestSized(
-          px, py, sr, this.x, this.y, this.gene.radius,
-          p.preyMinRadius, p.predationRatio, this.gene.radius[i], i, this.kill,
-        );
+      if (wantPrey || wantThreat) {
+        const q = this.pairQ;
+        q.sizes = this.gene.radius;
+        q.exclude = i;
+        q.loA = wantPrey ? p.preyMinRadius : Infinity;
+        q.mulA = p.predationRatio;
+        q.hiA = ri;
+        q.flagsA = this.kill;
+        q.loB = wantThreat ? ri * p.predationRatio : Infinity;
+        q.mulB = 1;
+        q.hiB = Infinity;
+        this.orgGrid.nearestPair(px, py, sr, this.x, this.y, q, this.pairOut);
+
+        const prey = this.pairOut[0];
         if (prey >= 0) {
           const pdx = this.x[prey] - px;
           const pdy = this.y[prey] - py;
@@ -569,14 +605,8 @@ export class World {
             sy = (pdy / d) * w;
           }
         }
-      }
 
-      const fw = this.gene.flee[i];
-      if (fw > 0) {
-        const threat = this.orgGrid.nearestSized(
-          px, py, sr, this.x, this.y, this.gene.radius,
-          this.gene.radius[i] * p.predationRatio, 1, Infinity, i, null,
-        );
+        const threat = this.pairOut[1];
         if (threat >= 0) {
           const dx = this.x[threat] - px;
           const dy = this.y[threat] - py;
