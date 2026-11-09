@@ -37,10 +37,14 @@ pnpm browser-check http://localhost:4321/?seed=check 4 240   # headless Edge ove
                                   # pixels, 4 graph panels, then 240 s turbo soak with heap per 10 s
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck + `test:quick` + build on every push and pull request,
-and the full `pnpm test` on a merge to `main`/`develop`. `browser-check` is not in CI — it drives a real
-headless Edge over CDP and that toolchain is not on a runner — so it is run by hand before a release,
-and it is the only thing that proves the UI, the replay, the restore, and the throughput floor.
+There is a CI workflow, `.github/workflows/ci.yml.disabled`, and it is **switched off**: rename it to
+`ci.yml` to enable. It is off because no GitHub-hosted runner is provisioned for this account — every
+job, including a one-step `echo`, fails in ~4 s with `runner_id=0` and no log — so an enabled workflow
+would put a red X on every push for a reason that is not the code. When runners work, it runs typecheck
++ `test:quick` + build on every push and pull request, and the full `pnpm test` on a merge.
+`browser-check` is not in CI either way: it drives a real headless Edge over CDP and that toolchain is
+not on a runner. So today every gate below is run by hand, and `browser-check` is the only thing that
+proves the UI, the replay, the restore, and the throughput floor.
 
 Controls: click = drop food, shift+click = inspect an organism (genome readout + sense radius),
 i = isolate its lineage (everything else dims, its trail is drawn), space = pause, n = one tick,

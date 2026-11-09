@@ -1,5 +1,14 @@
 name: CI
 
+# DISABLED ON PURPOSE -- the .disabled suffix means GitHub does not load it.
+# Rename to ci.yml to enable. It is not disabled because it is broken: on this
+# account every job, including a one-step `echo`, fails in ~4 s with runner_id=0
+# / runner_name="" and no log at all, i.e. no GitHub-hosted runner is ever
+# assigned. Check github.com/settings/billing -> Spending limits -> GitHub
+# Actions runners (a limit of 0 blocks jobs even on public repos). Until that is
+# fixed, an enabled workflow would post a red X on every push that is not about
+# the code, which is worse than no CI.
+#
 # Every gate that runs locally, minus the headless-browser check:
 # `pnpm browser-check` needs a Chrome/Edge install and a CDP port, so it stays
 # a local command. See the README, "Checking it yourself".
