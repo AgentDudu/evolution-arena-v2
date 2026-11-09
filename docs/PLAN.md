@@ -298,7 +298,7 @@ Where a full-arena tick went before the pass (Node CPU profile, 36 000 ticks of 
 70 651 candidates walked/tick, and **88% of queries end empty** — so the cost was paying an indirect
 predicate call per candidate for answers that were usually "nothing here".
 
-Two edits, both hash-identical by construction (same cell order, same bucket order, same `<=` tie
+Three edits, all hash-identical by construction (same cell order, same bucket order, same `<=` tie
 rule, same float comparisons in the same form):
 
 1. `nearest()` stopped taking coordinate accessor callbacks and takes the live `Float64Array`s;
@@ -307,18 +307,28 @@ rule, same float comparisons in the same form):
    `lo <= sizes[item]`, `sizes[item] * mul <= hi`). The prey / threat / edible rules became arguments
    instead of three arrow functions reading a stashed hunter index, and the traversal is duplicated
    on purpose rather than shared behind a branch.
+3. `nearestPair()` answers the prey question and the threat question in **one** walk. `think()` was
+   querying the organism grid twice per organism with the same centre, the same radius and therefore
+   the same cells; both filters are now evaluated per candidate in a single pass, each keeping its own
+   distance and its own `<=` tie rule. The query record and the two-slot output array live on the
+   World and are mutated per call, so the tick still allocates nothing. Alongside it, `rebuildGrids()`
+   records the arena's min and max radius, and `think()` sets a filter's lower bound to Infinity —
+   skipping the walk entirely — when no organism in the world can satisfy it. That is a proof of
+   emptiness, not a guess.
 
-| Measurement (36 000 ticks) | Before | After |
-| --- | --- | --- |
-| `arena-1`, pop 1 023 | 1.66 ms/tick, 604 ticks/s | 1.11 ms/tick, 900 ticks/s |
-| `morph-1`, pop 1 420 | 2.06, 486 | 1.33, 754 |
-| `long-2`, pop 1 786 | 2.97, 337 | 1.82, 550 |
-| `long-2` CPU for the run | 38.9 s | 24.3 s |
-| State hash, all three seeds | `6be10944` / `6c6a03fd` / `ec4dc9f8` | identical — the world is bit-for-bit the same run |
-| Browser turbo, playing arena | ~208 ticks/s | **730–738 ticks/s at pop 648–685, 56 fps, 28 ms worst frame gap** |
+| Measurement (36 000 ticks) | Before | Inline accept rule | One walk, two answers |
+| --- | --- | --- | --- |
+| `arena-1`, pop 1 023 | 1.66 ms/tick, 604 ticks/s | 1.11, 900 | **0.845, 1 184** |
+| `morph-1`, pop 1 420 | 2.06, 486 | 1.33, 754 | **1.079, 927** |
+| `long-2`, pop 1 786 | 2.97, 337 | 1.82, 550 | **1.417, 706** |
+| `long-2` CPU for the run | 62.2 s | 38.9 s | **25.9 s** |
+| State hash, all three seeds | `6be10944` / `6c6a03fd` / `ec4dc9f8` | identical | identical — bit-for-bit the same run, including pop / food / energy / generation / species at the finish |
+| Browser turbo, playing arena | ~208 ticks/s | 723–738 | **912 at pop 651, 57 fps, 25 ms worst frame gap** |
 
-Post-pass profile shape: `nearestSized` 39.5%, `think` 35.3%, `predation` 9.2%, `eat` 4.8% — the
-predicate callbacks are off the map entirely.
+Post-pass profile shape (profiler overhead included, so the absolute ms above is lower than this run
+reported): `think` 36.1% — the steering math around the queries, `nearestPair` 33.5%, `predation`
+10.9%, `eat` 5.7%, `integrate` 2.8%, `metabolise` 2.1%, `rebuildGrids` 1.9%, GC 1.0%. The predicate
+callbacks are off the map entirely, and the grid walk is now one pass instead of two.
 
 **The floor, enforced by `pnpm browser-check`** (Chrome/Edge headless over CDP, `?seed=check`, page
 painting throughout): a playing arena of **pop >= 500** sustains **>= 450 ticks/s** under turbo,
@@ -329,18 +339,17 @@ measured when it was written, and it was proven to bite: raising it to 5000 for 
 Rejected on purpose: replacing `Math.hypot` with `Math.sqrt(x*x+y*y)`. Measured 27.9 ns vs 20.2 ns a
 call across the 5 calls per organism per tick — roughly 10% of the run, for a change that moves the
 physics at bit level and therefore every future world and every pinned hash in the long tests.
-Also left alone: skipping queries whose answer is provably empty from world-wide radius bounds —
-worth only ~17% of those walks at a mature population (measured: 81–83% of organisms could have a
-prey or a threat). The remaining lever, if the floor ever needs more room, is merging the prey and
-threat walks in `think()` — both query the same grid, same centre, same radius, so one walk could
-answer both; estimated ~13% of the tick, no behavioural change.
+Also not taken: skipping a food query when the arena has no food (at a mature population there are
+25-98 particles, so the branch would almost never fire).
 
-So the real budget is **not met yet**: 34k ticks/min against a 300k target. One tick at 60 Hz is
-comfortable (1.75 ms of a 16.7 ms frame), but turbo fast-forward at 8× is not. Before any
-architecture change, the cheap candidates are: the threat query in `think()` scans up to
-`senseRadius` on the organism grid (drop the flee scan when `flee == 0`, which most organisms
-have after a few hundred ticks), the food grid's stale cells after a swap-remove, and reusing one
-scratch buffer for grid buckets. Re-measure after each.
+Against the plan's budget of 300k ticks/min the sim now does **71k ticks/min at pop 1 023 and 42k at
+pop 1 786** — about a quarter and a seventh of the target, which is still not enough for turbo to run
+a full arena at the fast-forward rate. What is left in the tick is mostly irreducible per-organism
+work (`think`'s steering, `predation`, `eat`), so the next real gain would come from an architecture
+change — a coarser organism update (idle organisms re-think every other tick), or moving the sim off
+the main thread so the frame budget stops competing with it. Both change what is simulated or what
+the user sees, so neither is a free win; both are behind the throughput gate now, which would catch
+any regression.
 
 ## 11. Testing
 

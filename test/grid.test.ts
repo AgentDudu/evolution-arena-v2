@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { UniformGrid } from '../src/core/grid.ts';
+import { UniformGrid, type PairQuery } from '../src/core/grid.ts';
 import { Rng } from '../src/core/rng.ts';
 
 const W = 1000;
@@ -144,6 +144,52 @@ describe('UniformGrid', () => {
           expect(got).toBe(want);
         }
       }
+    }
+  });
+
+  /** nearestPair() replaces two nearestSized() walks over the same cells with one pass. Both answers
+   *  have to be the exact index each separate walk would have picked, or the arena's prey and flee
+   *  decisions move and the world is a different world. */
+  it('nearestPair() returns exactly what two separate nearestSized() walks return', () => {
+    const rng = new Rng('grid-pair');
+    const { x, y } = makePoints(rng);
+    const sizes = new Float64Array(N);
+    const flags = new Uint8Array(N);
+    for (let i = 0; i < N; i++) {
+      sizes[i] = 2 + (i % 9);
+      if (i % 4 === 0) flags[i] = 1;
+    }
+    const q: PairQuery = { sizes, exclude: -1, loA: 0, mulA: 1, hiA: 0, flagsA: flags, loB: 0, mulB: 1, hiB: 0 };
+    const out = new Int32Array(2);
+    for (const cellSize of [16, 64, 200]) {
+      const grid = new UniformGrid(W, H, cellSize, N);
+      for (let i = 0; i < N; i++) grid.insert(i, x[i] ?? 0, y[i] ?? 0);
+      for (let q0 = 0; q0 < 100; q0++) {
+        const qx = rng.range(0, W);
+        const qy = rng.range(0, H);
+        const r = rng.range(5, 250);
+        const exclude = Math.floor(rng.range(0, N));
+        q.exclude = exclude;
+        // filter A: a size band plus the kill flags; filter B: a plain lower size bound
+        q.loA = rng.range(3, 7);
+        q.mulA = rng.range(1, 2);
+        q.hiA = rng.range(5, 12);
+        q.loB = rng.range(5, 10) * rng.range(1, 2);
+        q.mulB = 1;
+        q.hiB = Infinity;
+        grid.nearestPair(qx, qy, r, x, y, q, out);
+        expect(out[0]).toBe(grid.nearestSized(qx, qy, r, x, y, sizes, q.loA, q.mulA, q.hiA, exclude, flags));
+        expect(out[1]).toBe(grid.nearestSized(qx, qy, r, x, y, sizes, q.loB, q.mulB, q.hiB, exclude, null));
+      }
+      // a filter switched off with lo = Infinity must report nothing
+      q.loA = Infinity;
+      q.loB = 0;
+      q.mulA = 1;
+      q.hiA = 0;
+      q.hiB = Infinity;
+      grid.nearestPair(200, 200, 300, x, y, q, out);
+      expect(out[0]).toBe(-1);
+      expect(out[1]).not.toBe(-1);
     }
   });
 });

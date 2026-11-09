@@ -16,8 +16,11 @@ drop a designed genome into the running world, a delete mode, six sim sliders an
 apply to the running world, and three events (food bloom, catastrophe, mutation burst). Save and share:
 `save` snapshots the world, `share` builds a link that rebuilds the identical world in another browser,
 and reopening the page picks up the last run. The performance pass (item 8) is in: a full arena ticks
-1.6× faster than it did, with the state hash unchanged bit for bit, and the throughput floor is one
-of the things `pnpm browser-check` fails a build on.
+2× faster than it did — the grid evaluates the prey / threat / edible accept test inline, and one walk
+now answers both the prey and the threat question instead of walking the same cells twice — with the
+state hash unchanged bit for bit. The throughput floor (>= 450 ticks/s at pop >= 500 under turbo, >= 45
+fps, no frame gap over 60 ms) is one of the things `pnpm browser-check` fails a build on; measured here
+it runs 912 ticks/s at pop 651 while painting at 57 fps.
 
 ```sh
 pnpm install
