@@ -25,17 +25,22 @@ it runs 912 ticks/s at pop 651 while painting at 57 fps.
 ```sh
 pnpm install
 pnpm dev                          # http://localhost:5173 — whole world fitted to the window
-pnpm test                         # everything: 131 tests, ~4 min (long arena runs dominate)
-pnpm test:quick                   # same suite minus *.long.test.ts: 108 tests, ~15 s — the edit loop
+pnpm test                         # everything: 133 tests, ~4 min (long arena runs dominate)
+pnpm test:quick                   # same suite minus *.long.test.ts: 110 tests, ~15 s — the edit loop
 pnpm typecheck
 node scripts/headless.ts 36000    # [ticks] [seed] [json params] -> report + species + state hash
 node --expose-gc scripts/headless.ts 216000 arena-1   # a sim-hour soak: buffers + collected heap
 node scripts/foodweb.ts 216000 arena-1  # size structure every sim-minute: radius percentiles,
                                   # morph counts, large-particle reservoir. [ticks] [seed] [json params]
-pnpm build && npx vite preview --port 4321 &
+pnpm build && npx vite preview --port 4321
 pnpm browser-check http://localhost:4321/?seed=check 4 240   # headless Edge over CDP: ticks/s, painted
                                   # pixels, 4 graph panels, then 240 s turbo soak with heap per 10 s
 ```
+
+CI (`.github/workflows/ci.yml`) runs typecheck + `test:quick` + build on every push and pull request,
+and the full `pnpm test` on a merge to `main`/`develop`. `browser-check` is not in CI — it drives a real
+headless Edge over CDP and that toolchain is not on a runner — so it is run by hand before a release,
+and it is the only thing that proves the UI, the replay, the restore, and the throughput floor.
 
 Controls: click = drop food, shift+click = inspect an organism (genome readout + sense radius),
 i = isolate its lineage (everything else dims, its trail is drawn), space = pause, n = one tick,

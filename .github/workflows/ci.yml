@@ -1,0 +1,64 @@
+name: CI
+
+# Every gate that runs locally, minus the headless-browser check:
+# `pnpm browser-check` needs a Chrome/Edge install and a CDP port, so it stays
+# a local command. See the README, "Checking it yourself".
+#
+# Actions are pinned to commit SHAs (the v4 tags as of 2026-11-09) instead of
+# moving tags, so an upstream change cannot silently alter what runs here:
+#   gh api repos/<owner>/<repo>/commits/v4 --jq .sha
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# Nothing here pushes, publishes, or reads a secret.
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # package.json engines: >=24. Node strips .ts types itself, so the
+          # sim runs without a build step.
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      # the seconds-long lane; the long tests run on merge, below
+      - run: pnpm test:quick
+      # proves the bundle a visitor actually loads still builds
+      - run: pnpm build
+
+  # The behaviour and determinism tests are minutes of ticks, so they gate
+  # merges rather than every commit on a pull request. A merge to main or
+  # develop is what has to be provably the same world.
+  long-suite:
+    needs: checks
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
