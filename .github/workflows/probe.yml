@@ -1,0 +1,30 @@
+name: Probe
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  bare:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo bare ok
+  checkout-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: echo checkout-tag ok
+  checkout-sha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: echo checkout-sha ok
+  pnpm-sha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11
+      - run: pnpm --version && echo pnpm-sha ok
