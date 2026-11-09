@@ -107,13 +107,8 @@ export class World {
    *  engineered lineage is counted against the wild population without walking the ancestry. */
   readonly origin: Uint8Array;
 
-  private readonly fxAt = (i: number): number => this.fx[i];
-  private readonly fyAt = (i: number): number => this.fy[i];
   /** Set per organism before a food query: the largest particle radius it can handle (gape). */
   private foodGape = 0;
-  private readonly isEdible = (j: number): boolean => (this.fr[j] ?? 0) <= this.foodGape;
-  private readonly orgXAt = (i: number): number => this.x[i];
-  private readonly orgYAt = (i: number): number => this.y[i];
 
   foodCount = 0;
   readonly fx: Float64Array;
@@ -489,27 +484,14 @@ export class World {
     return best;
   }
 
-  private threatSource = -1;
-  private huntTarget = -1;
   private foodAcc = 0;
 
-  private readonly isThreat = (j: number): boolean => {
-    const src = this.threatSource;
-    return j !== src && this.gene.radius[j] >= this.gene.radius[src] * this.params.predationRatio;
-  };
-
-  /** j is prey for huntTarget when it is meaningfully smaller but still worth handling — the
-   *  size-ratio rule plus the gape floor of §5. */
-  private readonly isPrey = (j: number): boolean => {
-    const h = this.huntTarget;
-    const rj = this.gene.radius[j];
-    return (
-      j !== h &&
-      this.kill[j] === 0 &&
-      rj >= this.params.preyMinRadius &&
-      rj * this.params.predationRatio <= this.gene.radius[h]
-    );
-  };
+  /* The prey / threat / edible tests used to be arrow-function callbacks handed to the grid, with
+   * the hunter index stashed in a field for them to read. At a full arena ~70 000 candidates a tick
+   * went through that indirect call and 88% of queries ended empty, so the test itself cost 24% of
+   * the run. The rules now live in the query: the size bounds are passed as arguments and compared
+   * inline. Same comparisons, same order, so the state hash is bit-identical — see
+   * UniformGrid.nearestSized for the mapping. */
 
   /** One tick. Order is fixed and load-bearing: think reads tick-start state, deaths are
    *  applied before children are appended, and children never act until the next tick. */
@@ -558,7 +540,7 @@ export class World {
       let sx = 0;
       let sy = 0;
 
-      const food = this.foodGrid.nearest(px, py, sr, this.fxAt, this.fyAt, this.isEdible);
+      const food = this.foodGrid.nearestSized(px, py, sr, this.fx, this.fy, this.fr, -Infinity, 1, this.foodGape, -1, null);
       if (food >= 0) {
         const dx = this.fx[food] - px;
         const dy = this.fy[food] - py;
@@ -571,8 +553,10 @@ export class World {
       // A smaller organism counts as food, so hunting reuses the seekFood weight instead of a new
       // gene: chase whichever edible thing is nearer.
       if (p.predationEnabled && this.gene.radius[i] >= p.predatorMinRadius) {
-        this.huntTarget = i;
-        const prey = this.orgGrid.nearest(px, py, sr, this.orgXAt, this.orgYAt, this.isPrey);
+        const prey = this.orgGrid.nearestSized(
+          px, py, sr, this.x, this.y, this.gene.radius,
+          p.preyMinRadius, p.predationRatio, this.gene.radius[i], i, this.kill,
+        );
         if (prey >= 0) {
           const pdx = this.x[prey] - px;
           const pdy = this.y[prey] - py;
@@ -589,8 +573,10 @@ export class World {
 
       const fw = this.gene.flee[i];
       if (fw > 0) {
-        this.threatSource = i;
-        const threat = this.orgGrid.nearest(px, py, sr, this.orgXAt, this.orgYAt, this.isThreat);
+        const threat = this.orgGrid.nearestSized(
+          px, py, sr, this.x, this.y, this.gene.radius,
+          this.gene.radius[i] * p.predationRatio, 1, Infinity, i, null,
+        );
         if (threat >= 0) {
           const dx = this.x[threat] - px;
           const dy = this.y[threat] - py;
@@ -656,7 +642,7 @@ export class World {
       const reach = r + p.bigFoodRadius;
       // shortcut: food cells go stale after a swap-remove within the same tick; the distance
       // check in nearest() still holds, so a particle is only ever missed, never double eaten.
-      const f = this.foodGrid.nearest(this.x[i], this.y[i], reach, this.fxAt, this.fyAt, this.isEdible);
+      const f = this.foodGrid.nearestSized(this.x[i], this.y[i], reach, this.fx, this.fy, this.fr, -Infinity, 1, this.foodGape, -1, null);
       if (f < 0) continue;
       // a particle too small to be worth handling for this organism still gets eaten, for almost nothing
       const crumbs = (this.fr[f] ?? 0) < p.foodMinShare * r ? p.foodSmallPenalty : 1;
@@ -691,9 +677,11 @@ export class World {
       if (this.kill[i] !== 0) continue;
       const r = this.gene.radius[i];
       if (r < p.predatorMinRadius) continue;
-      this.huntTarget = i;
       // overlap needs the pair within sum of radii, and no organism is bigger than GENES.radius.max
-      const prey = this.orgGrid.nearest(this.x[i], this.y[i], r + GENES.radius.max, this.orgXAt, this.orgYAt, this.isPrey);
+      const prey = this.orgGrid.nearestSized(
+        this.x[i], this.y[i], r + GENES.radius.max, this.x, this.y, this.gene.radius,
+        p.preyMinRadius, p.predationRatio, r, i, this.kill,
+      );
       if (prey < 0) continue;
       const gap = r + this.gene.radius[prey];
       const dx = this.x[prey] - this.x[i];

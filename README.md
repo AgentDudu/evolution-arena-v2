@@ -15,7 +15,9 @@ a per-organism inspector, and the sandbox: ten gene sliders, a "copy wild mean" 
 drop a designed genome into the running world, a delete mode, six sim sliders and two checkboxes that
 apply to the running world, and three events (food bloom, catastrophe, mutation burst). Save and share:
 `save` snapshots the world, `share` builds a link that rebuilds the identical world in another browser,
-and reopening the page picks up the last run. The performance pass (item 8) is what is left.
+and reopening the page picks up the last run. The performance pass (item 8) is in: a full arena ticks
+1.6× faster than it did, with the state hash unchanged bit for bit, and the throughput floor is one
+of the things `pnpm browser-check` fails a build on.
 
 ```sh
 pnpm install

@@ -51,7 +51,7 @@ describe('UniformGrid', () => {
         const qx = rng.range(0, W);
         const qy = rng.range(0, H);
         const r = rng.range(5, 250);
-        const got = grid.nearest(qx, qy, r, (i) => x[i] ?? 0, (i) => y[i] ?? 0);
+        const got = grid.nearest(qx, qy, r, x, y);
         const want = bruteNearest(x, y, qx, qy, r);
         if (want === -1) {
           expect(got).toBe(-1);
@@ -74,7 +74,7 @@ describe('UniformGrid', () => {
     for (let q = 0; q < 50; q++) {
       const qx = rng.range(0, W);
       const qy = rng.range(0, H);
-      const got = grid.nearest(qx, qy, 120, (i) => x[i] ?? 0, (i) => y[i] ?? 0, evenOnly);
+      const got = grid.nearest(qx, qy, 120, x, y, evenOnly);
       const want = bruteNearest(x, y, qx, qy, 120, evenOnly);
       if (want === -1) expect(got).toBe(-1);
       else expect(got).toBe(want);
@@ -106,7 +106,44 @@ describe('UniformGrid', () => {
     for (let i = 0; i < N; i++) grid.insert(i, x[i] ?? 0, y[i] ?? 0);
     grid.clear();
     for (let q = 0; q < 20; q++) {
-      expect(grid.nearest(rng.range(0, W), rng.range(0, H), 500, (i) => x[i] ?? 0, (i) => y[i] ?? 0)).toBe(-1);
+      expect(grid.nearest(rng.range(0, W), rng.range(0, H), 500, x, y)).toBe(-1);
+    }
+  });
+
+  /** nearestSized() exists only to drop the per-candidate callback from the sim's queries, so it has
+   *  to return the *same index* nearest() returns, not merely an equally close item — a different
+   *  winner would drift the whole world. The bounds are the shape the three sim rules use. */
+  it('nearestSized() answers with the same index as nearest() plus the equivalent predicate', () => {
+    const rng = new Rng('grid-sized');
+    const { x, y } = makePoints(rng);
+    const sizes = new Float64Array(N);
+    const flags = new Uint8Array(N);
+    for (let i = 0; i < N; i++) {
+      sizes[i] = 2 + (i % 9);
+      if (i % 5 === 0) flags[i] = 1;
+    }
+    for (const cellSize of [16, 64, 200]) {
+      const grid = new UniformGrid(W, H, cellSize, N);
+      for (let i = 0; i < N; i++) grid.insert(i, x[i] ?? 0, y[i] ?? 0);
+      for (const withFlags of [true, false]) {
+        for (let q = 0; q < 80; q++) {
+          const qx = rng.range(0, W);
+          const qy = rng.range(0, H);
+          const r = rng.range(5, 250);
+          const lo = rng.range(3, 8);
+          const mul = rng.range(1, 2.5);
+          const hi = rng.range(4, 16);
+          const exclude = withFlags ? Math.floor(rng.range(0, N)) : -1;
+          const accepts = (i: number): boolean =>
+            i !== exclude &&
+            (!withFlags || (flags[i] ?? 0) === 0) &&
+            (sizes[i] ?? 0) >= lo &&
+            (sizes[i] ?? 0) * mul <= hi;
+          const want = grid.nearest(qx, qy, r, x, y, accepts);
+          const got = grid.nearestSized(qx, qy, r, x, y, sizes, lo, mul, hi, exclude, withFlags ? flags : null);
+          expect(got).toBe(want);
+        }
+      }
     }
   });
 });

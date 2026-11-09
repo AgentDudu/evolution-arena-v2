@@ -245,13 +245,49 @@ const expression = `(async () => {
     const heapBefore = window.arena.memory();
     const samplesBefore = window.arena.metrics().length;
 
-    document.getElementById('turbo').click();
-    const turboStartTick = w.tick;
-    const turboStart = performance.now();
-    await new Promise((r) => setTimeout(r, ${Math.round(seconds * 1000)}));
+    // Throughput with the page painting: the number the arena lives by, because a person watches
+    // turbo in a tab rather than a headless loop. Paint rate is counted from the page's own animation
+    // frames — no instrumentation hook has to exist in the app for it — and population is recorded
+    // alongside, because a ticks/s floor measured on an empty arena would mean nothing.
+    let turbo = { ticks: 0, perSecond: 0, pop: 0, fps: 0, maxFrameGapMs: 0, playLabel: '', error: null };
+    try {
+      // A paused world builds nothing no matter how hard turbo is pressed, so state the precondition
+      // and enforce it rather than reporting a throughput of zero.
+      const playBtn = document.getElementById('playpause');
+      if (playBtn && playBtn.textContent === 'play') playBtn.click();
+      turbo.playLabel = playBtn ? playBtn.textContent : '';
+      let frames = 0;
+      let lastFrame = performance.now();
+      let maxGap = 0;
+      let rafId = 0;
+      const countFrame = () => {
+        frames++;
+        const now = performance.now();
+        maxGap = Math.max(maxGap, now - lastFrame);
+        lastFrame = now;
+        rafId = requestAnimationFrame(countFrame);
+      };
+      rafId = requestAnimationFrame(countFrame);
+      document.getElementById('turbo').click();
+      const t0 = window.arena.world().tick;
+      const wall0 = performance.now();
+      await new Promise((r) => setTimeout(r, ${Math.round(seconds * 1000)}));
+      const wallMs = performance.now() - wall0;
+      cancelAnimationFrame(rafId);
+      const worldAfterTurbo = window.arena.world();
+      turbo = {
+        ticks: worldAfterTurbo.tick - t0,
+        perSecond: Math.round((worldAfterTurbo.tick - t0) / (wallMs / 1000)),
+        pop: worldAfterTurbo.alive,
+        fps: Math.round(frames / (wallMs / 1000)),
+        maxFrameGapMs: Math.round(maxGap),
+        error: null,
+      };
+      document.getElementById('turbo').click();
+    } catch (turboFailure) {
+      turbo.error = String(turboFailure);
+    }
     const afterTurbo = window.arena.world();
-    const turbo = { ticks: afterTurbo.tick - turboStartTick, perSecond: (afterTurbo.tick - turboStartTick) / ((performance.now() - turboStart) / 1000) };
-    document.getElementById('turbo').click();
 
     const metrics = window.arena.metrics();
     const heapAfter = window.arena.memory();
@@ -458,6 +494,7 @@ if (problems.length > 0) console.log('page exceptions:', problems);
 type Payload = {
   error?: string;
   soak?: { error?: string | null };
+  turbo?: { ticks?: number; perSecond?: number; pop?: number; fps?: number; maxFrameGapMs?: number; playLabel?: string; error?: string | null };
   inkRatio?: number;
   bigFoodInkPixels?: number;
   graph?: { panels?: number; uPlotCanvases?: number; histogramInkPixels?: number };
@@ -713,6 +750,17 @@ if (payload.error === undefined) {
   if (!payload.tools?.bloomStatus?.includes('food bloom')) gates.push('the food bloom button did not run');
   if (payload.tools && ((payload.tools.foodAfterBloom ?? 0) < (payload.tools.foodBefore ?? 0) || (payload.tools.foodAfterBloom ?? 0) > (payload.tools.foodCap ?? 0))) gates.push('food bloom went past the food cap');
   if ((payload.tools?.events ?? 0) < 5) gates.push(`the event log recorded ${String(payload.tools?.events)} perturbations, expected at least 5 (${payload.tools?.kinds ?? 'none'})`);
+  // The throughput floor. Measured on this machine in Chrome when the floor was written: 733 ticks/s
+  // at pop 680 while painting at 56 fps with a 28 ms worst frame gap, and 550 ticks/s headless at
+  // pop 1 786. The floor sits ~40% under that, so it catches a real regression — a per-candidate
+  // callback coming back cost ~35% of the sim's throughput — without flaking on a busy machine.
+  const turboRun = payload.turbo;
+  if (turboRun?.error) gates.push(`the turbo throughput stage threw ${turboRun.error}`);
+  if ((turboRun?.pop ?? 0) < 500) gates.push(`the throughput floor was measured on a population of ${String(turboRun?.pop)} — under 500 organisms the number means nothing`);
+  if ((turboRun?.perSecond ?? 0) < 450) gates.push(`a playing arena (${String(turboRun?.pop)} organisms) sustained ${String(turboRun?.perSecond)} ticks/s under turbo, below the floor of 450 — too slow to be worth watching`);
+  if ((turboRun?.fps ?? 0) < 45) gates.push(`turbo left the page painting at ${String(turboRun?.fps)} fps — the arena is meant to stay animated while the sim runs at speed`);
+  if ((turboRun?.maxFrameGapMs ?? 0) > 60) gates.push(`turbo stalled ${String(turboRun?.maxFrameGapMs)} ms between frames — one frame over budget is a stutter a person sees`);
+
   if (replay.error) gates.push(`the share replay stage threw ${replay.error}`);
   if (!replay.error && replay.hash !== replay.senderHash) {
     gates.push(`the share link rebuilt a different world: tick ${String(replay.tick)} hash ${String(replay.hash)} vs sender tick ${String(replay.senderTick)} hash ${String(replay.senderHash)}`);

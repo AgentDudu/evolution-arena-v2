@@ -290,6 +290,51 @@ all sim input through messages and complicates the sandbox tools).
 | Browser turbo with predation | ~208 ticks/s at 49 fps (was ~400): one extra grid query per hunter per tick is the whole gap |
 | Bundle | 6.45 kB gzipped (budget 200 kB) |
 
+## 10b. Performance pass (item 8) — what the profile said, and the floor
+
+Where a full-arena tick went before the pass (Node CPU profile, 36 000 ticks of seed `long-2`,
+38.9 s of CPU): `UniformGrid.visit` 34.5%, `isPrey` 13.3%, `think` 11.0%, `isThreat` 8.5%,
+`nearest` 7.5%, `predation` 6.0%, `eat` 4.0%. Counting the queries directly: 5 464 queries/tick,
+70 651 candidates walked/tick, and **88% of queries end empty** — so the cost was paying an indirect
+predicate call per candidate for answers that were usually "nothing here".
+
+Two edits, both hash-identical by construction (same cell order, same bucket order, same `<=` tie
+rule, same float comparisons in the same form):
+
+1. `nearest()` stopped taking coordinate accessor callbacks and takes the live `Float64Array`s;
+   the cell walk is written out instead of going through `visit()` with a closure.
+2. `nearestSized()` evaluates the accept test inline (`item !== exclude`, `flags[item] === 0`,
+   `lo <= sizes[item]`, `sizes[item] * mul <= hi`). The prey / threat / edible rules became arguments
+   instead of three arrow functions reading a stashed hunter index, and the traversal is duplicated
+   on purpose rather than shared behind a branch.
+
+| Measurement (36 000 ticks) | Before | After |
+| --- | --- | --- |
+| `arena-1`, pop 1 023 | 1.66 ms/tick, 604 ticks/s | 1.11 ms/tick, 900 ticks/s |
+| `morph-1`, pop 1 420 | 2.06, 486 | 1.33, 754 |
+| `long-2`, pop 1 786 | 2.97, 337 | 1.82, 550 |
+| `long-2` CPU for the run | 38.9 s | 24.3 s |
+| State hash, all three seeds | `6be10944` / `6c6a03fd` / `ec4dc9f8` | identical — the world is bit-for-bit the same run |
+| Browser turbo, playing arena | ~208 ticks/s | **730–738 ticks/s at pop 648–685, 56 fps, 28 ms worst frame gap** |
+
+Post-pass profile shape: `nearestSized` 39.5%, `think` 35.3%, `predation` 9.2%, `eat` 4.8% — the
+predicate callbacks are off the map entirely.
+
+**The floor, enforced by `pnpm browser-check`** (Chrome/Edge headless over CDP, `?seed=check`, page
+painting throughout): a playing arena of **pop >= 500** sustains **>= 450 ticks/s** under turbo,
+the page keeps **>= 45 fps**, and no frame gap exceeds **60 ms**. The floor sits ~40% under what was
+measured when it was written, and it was proven to bite: raising it to 5000 for one run failed with
+`a playing arena (685 organisms) sustained 738 ticks/s under turbo, below the floor of 5000`.
+
+Rejected on purpose: replacing `Math.hypot` with `Math.sqrt(x*x+y*y)`. Measured 27.9 ns vs 20.2 ns a
+call across the 5 calls per organism per tick — roughly 10% of the run, for a change that moves the
+physics at bit level and therefore every future world and every pinned hash in the long tests.
+Also left alone: skipping queries whose answer is provably empty from world-wide radius bounds —
+worth only ~17% of those walks at a mature population (measured: 81–83% of organisms could have a
+prey or a threat). The remaining lever, if the floor ever needs more room, is merging the prey and
+threat walks in `think()` — both query the same grid, same centre, same radius, so one walk could
+answer both; estimated ~13% of the tick, no behavioural change.
+
 So the real budget is **not met yet**: 34k ticks/min against a 300k target. One tick at 60 Hz is
 comfortable (1.75 ms of a 16.7 ms frame), but turbo fast-forward at 8× is not. Before any
 architecture change, the cheap candidates are: the threat query in `think()` scans up to
